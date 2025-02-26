@@ -1,0 +1,24 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "Advanced Multiplayer Projectiles",
+	"Description": "Projectiles for Multiplayer!",
+	"Category": "Other",
+	"CreatedBy": "Reznok",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"CanContainContent": true,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "AdvancedMultiplayerProjectiles",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

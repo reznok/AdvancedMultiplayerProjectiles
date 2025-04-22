@@ -1,0 +1,329 @@
+﻿// Fill out your copyright notice in the Description page of Project Settings.
+
+
+#include "Components/AMP_ProjectileMovementComponent.h"
+
+#include "Actors/AMP_AMPManager.h"
+#include "GameFramework/PlayerState.h"
+#include "Kismet/GameplayStatics.h"
+
+
+// Sets default values for this component's properties
+UAMP_ProjectileMovementComponent::UAMP_ProjectileMovementComponent()
+{
+	// Set this component to be initialized when the game starts, and to be ticked every frame.  You can turn these features
+	// off to improve performance if you don't need them.
+	PrimaryComponentTick.bCanEverTick = true;
+
+	// ...
+}
+
+void UAMP_ProjectileMovementComponent::DestroyProjectile()
+{
+	if (ProjectileManager)
+	{
+		ProjectileManager->DestroyProjectile(this);
+	}
+	else
+	{
+		GetOwner()->Destroy();
+	}
+
+	OnProjectileDestroyed.Broadcast();
+}
+
+// Called when the game starts
+void UAMP_ProjectileMovementComponent::BeginPlay()
+{
+	Super::BeginPlay();
+	// ...
+	RootComponent = Cast<UPrimitiveComponent>(GetOwner()->GetRootComponent());
+	if (!RootComponent && bUseAdaptivePrediction)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("UAMP_ProjectileMovementComponent::BeginPlay: RootComponent is not a collider, adaptive prediction will be disabled"));
+	}
+}
+
+void UAMP_ProjectileMovementComponent::SetProjectileData(const FAMP_ProjectileData& NewProjectileData, const TObjectPtr<AAMP_AMPManager> NewPredictedProjectileManager)
+{
+	ProjectileData = NewProjectileData;
+	ProjectileManager = NewPredictedProjectileManager;
+
+	if (!ProjectileManager)
+	{
+		UE_LOG(LogAMP, Error, TEXT("UAMP_ProjectileMovementComponent::SetProjectileData: ProjectileManager is nullptr"));
+		return;
+	}
+
+	if (!ProjectileData.Owner)
+	{
+		UE_LOG(LogAMP, Error, TEXT("UAMP_ProjectileMovementComponent::SetProjectileData: Owner is nullptr"));
+		return;
+	}
+	
+	InterpolationTimeRemaining = 0.0f;
+	ForwardInterpolationTime = 0.0f;
+	
+	InitializeProjectile();
+}
+
+void UAMP_ProjectileMovementComponent::ResetProjectile()
+{
+	bForwardInterpolationStarted = false;
+	bIsCheckingAdaptivePrediction = false;
+	bFoundAdaptivePredictionHit = false;
+}
+
+void UAMP_ProjectileMovementComponent::CalcInterpolationTime_PlayerPing()
+{
+	// The server uses the time between the firing client and the server to determine how far ahead the projectile should simulate
+	if (ProjectileData.Owner->HasAuthority())
+	{
+		HalfRTT = (InterpolationType != EAMP_InterpolationType::None && GetNetMode() != NM_Standalone) ? (FMath::Clamp((ProjectileManager->GetServerPredictionTime(ProjectileData.Owner)) * 0.0005f, 0.f, MaxPredictionPing / 1000)) : 0.f;
+		InterpolationTimeRemaining = HalfRTT;
+	}
+	// The client uses the time between the server and its self to determine how far ahead the projectile should simulate
+	else
+	{
+		HalfRTT = (InterpolationType != EAMP_InterpolationType::None && GetNetMode() != NM_Standalone) ? (FMath::Clamp((GetClientPredictionTime()) * 0.0005f, 0.f, MaxPredictionPing / 1000)) : 0.f;
+		ForwardInterpolationTime = ProjectileData.SimulationDelay + (HalfRTT * 2.f) * FMath::Clamp(ProjectileData.ForwardPredictionScale, 0.f, 1.f);
+		ClientPredictedInterpolationTime = ProjectileData.FiringClientDelay;
+		InterpolationTimeRemaining = ClientPredictedInterpolationTime;
+	}
+}
+
+void UAMP_ProjectileMovementComponent::CalcInterpolationTime_NetworkTimeSync()
+{
+	// No interp for locally fired projectiles
+	if (ProjectileData.bIsLocallyFired) return;
+
+	// Even with NetworkTimeSync, ping is still used for forward interpolation
+	if (!ProjectileData.Owner->HasAuthority())
+	{
+		HalfRTT = (InterpolationType != EAMP_InterpolationType::None && GetNetMode() != NM_Standalone) ? (FMath::Clamp((GetClientPredictionTime() - PredictionFudgeFactor) * 0.0005f, 0.f, MaxPredictionPing / 1000)) : 0.f;
+		ForwardInterpolationTime = ProjectileData.SimulationDelay + HalfRTT * 2 * FMath::Clamp(ProjectileData.ForwardPredictionScale, 0.f, 1.f);
+	}
+		
+	const float CurrentTime = ProjectileManager->GetNetworkTimeSubsystem()->GetServerWorldTime();
+
+	if (ProjectileData.ClientProjectileSpawnTime != 0)
+	{
+		InterpolationTimeRemaining = (CurrentTime - ProjectileData.ClientProjectileSpawnTime) + .1f;
+	}
+	else if (ProjectileData.ServerProjectileSpawnTime != 0)
+	{
+		InterpolationTimeRemaining = CurrentTime - ProjectileData.ServerProjectileSpawnTime + PredictionFudgeFactor;
+	}
+	else
+	{
+		UE_LOG(LogAMP, Error, TEXT("UAMP_ProjectileMovementComponent::CalcInterpolationTime_NetworkTimeSync: ProjectileData has no spawn time"));
+	}
+}
+
+
+void UAMP_ProjectileMovementComponent::InitializeProjectile()
+{
+	// Set Projectile Transform
+	GetOwner()->SetActorLocation(AAMP_AMPManager::GetSpawnTransform(ProjectileData).GetLocation());
+	GetOwner()->SetActorTickEnabled(true);
+	GetOwner()->SetActorHiddenInGame(false);
+	GetOwner()->SetActorEnableCollision(true);
+	SetUpdatedComponent(GetOwner()->GetRootComponent());
+	
+	// Set Interpolation Type
+	InterpolationType = ProjectileData.InterpolationType;
+
+	// Set Lifetime
+	if (ProjectileData.LifeTime > 0)
+	{
+		bTickLifeTime = true;
+		LifeTime = ProjectileData.LifeTime;
+	}
+	
+	Velocity = ProjectileData.Velocity;
+
+	// Set up for Lag Compensation
+	switch (ProjectileManager->LagCompensationMethod)
+	{
+		case EAMP_LagCompensationMethod::NetworkTimeSync:
+			CalcInterpolationTime_NetworkTimeSync();
+			break;
+		case EAMP_LagCompensationMethod::PlayerPing:
+			CalcInterpolationTime_PlayerPing();
+			break;
+	default:
+		UE_LOG(LogAMP, Error, TEXT("UAMP_ProjectileMovementComponent::InitializeProjectile: Lag Compensation Method not set"));
+		return;
+	}
+	
+	// ClientPredicted is always applied
+	LifeTime -= ClientPredictedInterpolationTime;
+
+	const bool FiredLocally = ProjectileData.IsClientPredicted && !ProjectileData.bIsServerSpawned;
+	
+	if (!FiredLocally && !bUseAdaptivePrediction)
+	{
+		// Immediately start forward prediction
+		
+		bForwardInterpolationStarted = true;
+		InterpolationTimeRemaining += ForwardInterpolationTime;
+		LifeTime -= ForwardInterpolationTime;
+	}
+
+	OnProjectileInitialized.Broadcast();
+}
+
+bool UAMP_ProjectileMovementComponent::ShouldApplyAdaptivePrediction()
+{
+	return false;
+}
+
+float UAMP_ProjectileMovementComponent::HandleInterpolation(float DeltaTime)
+{
+	if (InterpolationTimeRemaining <= 0) return 0.0f;
+	
+	switch(InterpolationType)
+	{
+		case EAMP_InterpolationType::Smooth:
+			return SmoothToServerStateStep(DeltaTime);
+		case EAMP_InterpolationType::Snap:
+				SnapInterpolation();
+			break;
+		default:
+			break;
+	}
+
+	return 0.0f;
+}
+
+void UAMP_ProjectileMovementComponent::SnapInterpolation()
+{
+	for (int x = 0; x < SNAP_INTERPOLATION_SUBSTEPS; x++)
+	{
+		Super::TickComponent(InterpolationTimeRemaining / SNAP_INTERPOLATION_SUBSTEPS, ELevelTick::LEVELTICK_All, nullptr);
+	}
+	InterpolationTimeRemaining = 0.f;
+}
+
+float UAMP_ProjectileMovementComponent::SmoothToServerStateStep(float DeltaTime)
+{
+	float Step = 0.f;
+	
+	if (InterpolationTimeRemaining > 0)
+	{
+		Step = InterpolationTimeRemaining * SmoothingInterpSpeed;
+		InterpolationTimeRemaining -= Step;
+		
+		if (InterpolationTimeRemaining <= DeltaTime / 2.f)
+		{
+			Step += InterpolationTimeRemaining;
+			InterpolationTimeRemaining = 0.f;
+			return Step;
+		}
+	}
+	
+	return Step;
+}
+
+
+
+float UAMP_ProjectileMovementComponent::GetClientPredictionTime() const
+{
+	// Player Controller of the local player
+	const TObjectPtr<APlayerController> PlayerController = UGameplayStatics::GetPlayerController(GetWorld(), 0);
+
+	// Issue with getting the player controller
+	if (!IsValid(PlayerController)) return 0.0f;
+
+	const TObjectPtr<APlayerState> PlayerState = PlayerController->PlayerState;
+
+	// Issue with getting the player state
+	if (!IsValid(PlayerState)) return 0.0f;
+
+	return PlayerState->ExactPing;
+}
+
+void UAMP_ProjectileMovementComponent::BeginInterpolation()
+{
+	// Don't interp client predicted projectiles on their local machines
+	if (!ProjectileData.bIsServerSpawned) return;
+	
+	if (InterpolationType == EAMP_InterpolationType::Snap)
+	{
+		SnapInterpolation();
+	}
+	bForwardInterpolationStarted = true;
+}
+
+bool UAMP_ProjectileMovementComponent::IsLocalPlayerInProjectilePath(bool DrawDebug)
+{
+	FPredictProjectilePathParams PathParams;
+	PathParams.StartLocation = GetOwner()->GetActorLocation();
+	PathParams.LaunchVelocity = Velocity;
+	PathParams.bTraceWithCollision = true;
+	PathParams.ProjectileRadius = 100.f;
+	PathParams.MaxSimTime = 1.0f;
+	PathParams.bTraceWithChannel = true;
+	PathParams.TraceChannel = ECC_GameTraceChannel1;
+	if (DrawDebug)
+	{
+		PathParams.DrawDebugType = EDrawDebugTrace::ForDuration;
+		PathParams.DrawDebugTime = LifeTime;
+	}
+	PathParams.OverrideGravityZ = GetGravityZ();
+	if (PathParams.OverrideGravityZ == 0.0f)
+	{
+		// This is dumb, but PredictProjectilePath will use the World gravity if it's 0. This
+		// prevents that.
+		PathParams.OverrideGravityZ = 0.01f;
+	}
+	PathParams.ActorsToIgnore = {GetOwner(), ProjectileData.Owner};
+	
+	FPredictProjectilePathResult PathResult;
+	UGameplayStatics::PredictProjectilePath(GetWorld(), PathParams, PathResult);
+
+	if (PathResult.HitResult.bBlockingHit)
+	{
+		AActor* HitActor = PathResult.HitResult.GetActor();
+		if (!HitActor) return false;
+		APawn* HitPawn = Cast<APawn>(HitActor);
+		if (!HitPawn) return false;
+		APlayerController* LocalPlayerController = UGameplayStatics::GetPlayerController(GetWorld(), 0);
+		if (!LocalPlayerController) return false;
+		return HitPawn == LocalPlayerController->GetPawn();
+	}
+
+	return false;
+}
+
+// Called every frame
+void UAMP_ProjectileMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+{
+	if (bTickLifeTime)
+	{
+		LifeTime -= DeltaTime;
+		if (LifeTime <= 0)
+		{
+			if (ProjectileManager)
+			{
+				DestroyProjectile();
+				return;
+			}
+		}
+	}
+
+	if (GetNetMode() == NM_Client && bUseAdaptivePrediction && !bFoundAdaptivePredictionHit && IsLocalPlayerInProjectilePath(false))
+	{
+		bForwardInterpolationStarted = true;
+		bFoundAdaptivePredictionHit = true;
+		InterpolationTimeRemaining += ForwardInterpolationTime;
+		UE_LOG(LogAMP, Warning, TEXT("UAMP_ProjectileMovementComponent::TickComponent: Adaptive Prediction Hit"));
+	}
+
+	DeltaTime += HandleInterpolation(DeltaTime);
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	// ...
+}
+
+

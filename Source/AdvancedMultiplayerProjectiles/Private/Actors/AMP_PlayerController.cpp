@@ -4,13 +4,23 @@
 #include "Actors/AMP_PlayerController.h"
 
 #include "AMP_BlueprintFunctionLibrary.h"
+#include "NetworkTimeSyncComponent.h"
 
+
+AAMP_PlayerController::AAMP_PlayerController(const FObjectInitializer& ObjectInitializer) : Super(ObjectInitializer)
+{
+	NetworkTimeSyncComponent = CreateDefaultSubobject<UNetworkTimeSyncComponent>(TEXT("NetworkTimeSyncComponent"));
+}
 
 void AAMP_PlayerController::BeginPlay()
 {
 	Super::BeginPlay();
 
-	PredictedProjectileManager = UAMP_BlueprintFunctionLibrary::GetAMPManager(GetWorld());
+	ProjectileManager = UAMP_BlueprintFunctionLibrary::GetAMPManager(GetWorld());
+	if (NetworkTimeSyncComponent)
+	{
+		NetworkTimeSyncComponent->
+	}
 }
 
 UAMP_ProjectileMovementComponent* AAMP_PlayerController::SpawnClientPredictedProjectile(FAMP_ProjectileData ProjectileData)
@@ -27,30 +37,41 @@ UAMP_ProjectileMovementComponent* AAMP_PlayerController::SpawnClientPredictedPro
 
 TArray<UAMP_ProjectileMovementComponent*> AAMP_PlayerController::SpawnClientPredictedProjectiles(TArray<FAMP_ProjectileData>& ProjectileData)
 {
-	TArray<UAMP_ProjectileMovementComponent*> SpawnedProjectiles;
+	if (!ProjectileManager)
+	{
+		UE_LOG(LogAMP, Error, TEXT("AAMP_PlayerController::SpawnClientPredictedProjectiles: PredictedProjectileManager is nullptr"));
+		return {};
+	}
 
 	// Mark as client predicted
 	for (FAMP_ProjectileData& Data : ProjectileData)
 	{
-		Data.IsClientPredicted = true;
+		// Prevent listen server from marking as clientpredicted
+		Data.IsClientPredicted = !HasAuthority();
+		
+		Data.ClientProjectileSpawnTime = ProjectileManager->GetNetworkTimeSubsystem()->GetServerWorldTime();
+		Data.bIsLocallyFired = true;
+		
 	}
 	
 	// Spawn Locally
-	if (PredictedProjectileManager)
+	TArray<UAMP_ProjectileMovementComponent*> SpawnedProjectiles = ProjectileManager->SpawnProjectiles(ProjectileData);
+
+	// Call RPC to spawn on server
+	// Don't call from listen server local player
+	if (!HasAuthority())
 	{
-		SpawnedProjectiles = PredictedProjectileManager->SpawnProjectiles(ProjectileData);
+		ServerRPC_SpawnClientPredictedProjectiles(ProjectileData);
 	}
-	
-	ServerRPC_SpawnClientPredictedProjectiles(ProjectileData);
 	return SpawnedProjectiles;
 }
 
 
 void AAMP_PlayerController::ServerRPC_SpawnClientPredictedProjectiles_Implementation(const TArray<FAMP_ProjectileData>& ProjectileData)
 {
-	if (PredictedProjectileManager)
+	if (ProjectileManager)
 	{
-		PredictedProjectileManager->SpawnProjectiles(ProjectileData);
+		ProjectileManager->SpawnProjectiles(ProjectileData);
 	}
 }
 
@@ -61,16 +82,16 @@ bool AAMP_PlayerController::ServerRPC_SpawnClientPredictedProjectiles_Validate(c
 
 void AAMP_PlayerController::ClientRPC_DestroyProjectileSimProxy_Implementation(const FGuid ProjectileID)
 {
-	if (PredictedProjectileManager)
+	if (ProjectileManager)
 	{
-		PredictedProjectileManager->DestroyProjectileSimProxy(ProjectileID);
+		ProjectileManager->DestroyProjectileSimProxy(ProjectileID);
 	}
 }
 
 void AAMP_PlayerController::ClientRPC_SpawnProjectilesSimProxies_Implementation(const TArray<FAMP_ProjectileData>& ProjectileData)
 {
-	if (PredictedProjectileManager)
+	if (ProjectileManager)
 	{
-		PredictedProjectileManager->SpawnProjectilesSimProxies(ProjectileData);
+		ProjectileManager->SpawnProjectilesSimProxies(ProjectileData);
 	}
 }

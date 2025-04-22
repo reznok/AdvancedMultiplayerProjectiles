@@ -10,7 +10,6 @@ public class AdvancedMultiplayerProjectiles : ModuleRules
 		
 		PublicIncludePaths.AddRange(
 			new string[] {
-				"Public/Components"
 			}
 			);
 				
@@ -25,7 +24,7 @@ public class AdvancedMultiplayerProjectiles : ModuleRules
 		PublicDependencyModuleNames.AddRange(
 			new string[]
 			{
-				"Core", "Engine",
+				"Core", "Engine", "NetworkTimeSync",
 				// ... add other public dependencies that you statically link with here ...
 			}
 			);
@@ -38,6 +37,7 @@ public class AdvancedMultiplayerProjectiles : ModuleRules
 				"Engine",
 				"Slate",
 				"SlateCore",
+				"NetworkTimeSync",
 				// ... add private dependencies that you statically link with here ...	
 			}
 			);

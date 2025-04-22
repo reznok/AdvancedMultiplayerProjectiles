@@ -5,35 +5,44 @@
 
 #include "EngineUtils.h"
 #include "AdvancedMultiplayerProjectiles.h"
-#include "Actors/AMP_PlayerController.h"
 #include "Components/AMP_ProjectileMovementComponent.h"
 #include "GameFramework/PlayerState.h"
 #include "Kismet/GameplayStatics.h"
+#include "Utility/FAMP_ProjectilePool.h"
 
 
 // Sets default values
 AAMP_AMPManager::AAMP_AMPManager()
 {
+	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.bStartWithTickEnabled = true;
+	PrimaryActorTick.bAllowTickOnDedicatedServer = true;
 }
 
 // Called when the game starts or when spawned
 void AAMP_AMPManager::BeginPlay()
 {
+	if (HasAuthority())
+	{
+		SetReplicates(true);
+	}
+	
+	SetActorTickEnabled(true);
+	
 	Super::BeginPlay();
 	
 	if (bUseProjectilePool)
 	{
 		AllocateStartingPools();
 	}
-	
-	SetReplicates(true);
-	SetActorTickEnabled(true);
 
 	// Only Listen Servers and Clients need to know about the local player controller
 	if (GetNetMode() >= NM_ListenServer)
 	{
 		LocalPlayerController = UGameplayStatics::GetPlayerController(GetWorld(), 0);
 	}
+
+	NetworkTimeSubsystem = UNetworkTimeSubsystem::Get(this);
 }
 
 UAMP_ProjectileMovementComponent* AAMP_AMPManager::SpawnProjectile(FAMP_ProjectileData ProjectileData)
@@ -55,7 +64,11 @@ TArray<UAMP_ProjectileMovementComponent*> AAMP_AMPManager::SpawnProjectiles(cons
 	{
 		if (const TObjectPtr<UAMP_ProjectileMovementComponent> ProjectileCmp = FireProjectile(Data))
 		{
-			ServerProjectilesBuffer.Add(ProjectileCmp->GetProjectileData());
+			if (HasAuthority())
+			{
+				ServerProjectilesBuffer.Add(ProjectileCmp->GetProjectileData());
+			}
+			NewlySpawnedProjectiles.Add(ProjectileCmp);
 		}
 	}
 	
@@ -173,26 +186,19 @@ void AAMP_AMPManager::ProcessServerProjectilesBuffers(float DeltaTime)
 {
 	if (!HasAuthority()) return;
 	
-	ProjectileBufferIntervalTimer -= DeltaTime;
-	if (ProjectileBufferIntervalTimer <= 0)
+	if (ServerProjectilesBuffer.Num() > 0)
 	{
-		ProjectileBufferIntervalTimer = ProjectileBufferInterval;
-
-		if (ServerProjectilesBuffer.Num() > 0)
+		if (bUsePPNetRelevancy)
 		{
-			if (bUsePPNetRelevancy)
-			{
-				NetRelevant_SpawnProjectilesSimProxies(ServerProjectilesBuffer);
-			}
-			else
-			{
-				MultiCast_SpawnProjectilesSimProxies(ServerProjectilesBuffer);
-			}
-
-			ServerProjectilesBuffer.Empty();
+			NetRelevant_SpawnProjectilesSimProxies(ServerProjectilesBuffer);
 		}
+		else
+		{
+			MultiCast_SpawnProjectilesSimProxies(ServerProjectilesBuffer);
+		}
+
+		ServerProjectilesBuffer.Empty();
 	}
-	
 }
 
 void AAMP_AMPManager::SetProjectileDataDefaults(FAMP_ProjectileData& ProjectileData)
@@ -213,13 +219,39 @@ TObjectPtr<UAMP_ProjectileMovementComponent> AAMP_AMPManager::FireProjectile(FAM
 	QUICK_SCOPE_CYCLE_COUNTER(STAT_FireProjectile)
 	if (GetLocalRole() == ROLE_Authority)
 	{
+		// Prevent listen server from double spawning projectiles
+		if (SpawnedProjectiles.Contains(ProjectileData.ProjectileID))
+		{
+			return nullptr;
+		}
 		ProjectileData.ProjectileID = FGuid::NewGuid();
 		ProjectileData.bIsServerSpawned = true;
-		if (ProjectileData.IsClientPredicted && ProjectileData.Owner)
-		{
-			ProjectileData.FiringClientDelay = GetServerPredictionTime(ProjectileData.Owner) * .0005f;
-		}
 	}
+
+	switch (LagCompensationMethod)
+	{
+		case EAMP_LagCompensationMethod::PlayerPing:
+			if (GetLocalRole() == ROLE_Authority && ProjectileData.IsClientPredicted && ProjectileData.Owner)
+			{
+				ProjectileData.FiringClientDelay = GetServerPredictionTime(ProjectileData.Owner) * .0005f;
+			}
+			break;
+		case EAMP_LagCompensationMethod::NetworkTimeSync:
+			if (!NetworkTimeSubsystem)
+			{
+				UE_LOG(LogAMP, Error, TEXT("AAMP_AMPManager::FireProjectile: NetworkTimeSubsystem is null"));
+				return nullptr;
+			}
+		
+			if (GetLocalRole() == ROLE_Authority)
+			{
+				ProjectileData.ServerProjectileSpawnTime = NetworkTimeSubsystem->GetServerWorldTime();
+			}
+			break;
+		default:
+			break;
+	}
+	
 	
 	if (ProjectileData.ProjectileClass == nullptr)
 	{

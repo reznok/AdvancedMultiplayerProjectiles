@@ -3,7 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "FAMP_ProjectileData.h"
+#include "Utility/FAMP_ProjectileData.h"
 #include "Components/ActorComponent.h"
 #include "GameFramework/ProjectileMovementComponent.h"
 #include "AMP_ProjectileMovementComponent.generated.h"
@@ -12,8 +12,9 @@ class AAMP_AMPManager;
 class AAMP_AMPManager;
 struct FAMP_ProjectileData;
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnProjectileHit, AActor*, HitActor);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnProjectileHit, AActor*, HitActor, FVector, HitLocation);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnProjectileDestroyed);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnProjectileInitialized);
 
 UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
 class ADVANCEDMULTIPLAYERPROJECTILES_API UAMP_ProjectileMovementComponent : public UProjectileMovementComponent
@@ -44,6 +45,9 @@ public:
 
 	UPROPERTY(BlueprintAssignable)
 	FOnProjectileDestroyed OnProjectileDestroyed;
+
+	UPROPERTY(BlueprintAssignable)
+	FOnProjectileInitialized OnProjectileInitialized;
 
 protected:
 	// Called when the game starts
@@ -114,10 +118,6 @@ protected:
 
 	// Get the's 1/2 ping (one-way travel time) in seconds between the local client and the server
 	virtual float GetClientPredictionTime() const;
-
-	// Simulate the projectile to the end of its lifetime then snap it back to its position
-	// Used for Adaptive Prediction, where it will find players that this projectile might hit
-	virtual void SimulateProjectileToEndOfLifeTime();
 	
 	virtual void BeginInterpolation();
 
@@ -128,15 +128,13 @@ protected:
 	UPROPERTY(EditAnywhere)
 	float MaxPredictionPing{250.f};
 
-	// The amount of time in milliseconds to add to the player's ping to account for prediction fudge
+	// The amount of time in seconds to add to the player's ping to account for prediction fudge
 	// This is how Unreal Tournament does it
 	// https://github.com/JimmieKJ/unrealTournament/blob/cac883d9143e72d21c046bfa4a0915b3ad533dad/UnrealTournament/Source/UnrealTournament/Private/UTPlayerController.cpp#L281
 	UPROPERTY(EditAnywhere)
-	float PredictionFudgeFactor{0.f};
-
-	UFUNCTION()
-	void OnOverlapBegin(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult);
+	float PredictionFudgeFactor{.05f};
 	
+	virtual bool IsLocalPlayerInProjectilePath(bool DrawDebug = false);
 
 public:
 	// Called every frame
@@ -152,8 +150,11 @@ private:
 	TObjectPtr<UPrimitiveComponent> RootComponent;
 
 	UPROPERTY()
-	TObjectPtr<AAMP_AMPManager> PredictedProjectileManager;
+	TObjectPtr<AAMP_AMPManager> ProjectileManager;
 
 	const int SNAP_INTERPOLATION_SUBSTEPS = 10;
+
+	void CalcInterpolationTime_PlayerPing();
+	void CalcInterpolationTime_NetworkTimeSync();
 	
 };

@@ -74,9 +74,17 @@ struct ADVANCEDMULTIPLAYERPROJECTILES_API FAMP_ProjectileData
 	// Set by clients, should not be replicated
 	float SimulationDelay{0.f};
 
-	// The delay from the client firing the projectile to the server spawning it
+	// The delay from the client firing the projectile to the server spawning it (PlayerPing)
 	UPROPERTY()
 	float FiringClientDelay{0.f};
+
+	// The time the projectile was spawned on the client (NetworkTimeSync)
+	UPROPERTY()
+	float ClientProjectileSpawnTime;
+
+	// The time the projectile was spawned on the server (NetworkTimeSync)
+	UPROPERTY()
+	float ServerProjectileSpawnTime;
 
 	UPROPERTY()
 	FGuid ProjectileID{};
@@ -88,6 +96,10 @@ struct ADVANCEDMULTIPLAYERPROJECTILES_API FAMP_ProjectileData
 	// Whether the projectile was spawned by the server or not
 	UPROPERTY()
 	bool bIsServerSpawned{false};
+
+	// Used for local client prediction
+	// Not replicated
+	bool bIsLocallyFired{false};
 
 	inline bool operator==(const FAMP_ProjectileData& Other) const
 	{

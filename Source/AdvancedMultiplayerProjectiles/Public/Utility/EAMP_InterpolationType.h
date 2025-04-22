@@ -3,7 +3,7 @@
 #include "EAMP_InterpolationType.generated.h"
 
 
-UENUM()
+UENUM(Blueprintable)
 enum class EAMP_InterpolationType : uint8
 {
 	None,

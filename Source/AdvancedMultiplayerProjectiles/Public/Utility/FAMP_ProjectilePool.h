@@ -46,7 +46,7 @@ struct ADVANCEDMULTIPLAYERPROJECTILES_API FAMP_ProjectilePool
 		
 		if (Pool.Contains(Projectile))
 		{
-			UE_LOG(LogAMP, Warning, TEXT("FAMP_ProjectilePool::AddToPool: Projectile is already in the pool"));
+			// UE_LOG(LogAMP, Warning, TEXT("FAMP_ProjectilePool::AddToPool: Projectile is already in the pool"));
 			return;
 		}
 		

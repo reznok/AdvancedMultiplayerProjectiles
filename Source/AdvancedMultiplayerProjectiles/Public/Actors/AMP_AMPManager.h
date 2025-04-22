@@ -3,16 +3,20 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "FAMP_ProjectilePool.h"
+#include "NetworkTimeSubsystem.h"
 #include "GameFramework/Actor.h"
+#include "Utility/FAMP_ProjectileData.h"
+#include "Actors/AMP_PlayerController.h"
+#include "Utility/EAMP_LagCompensationMethod.h"
+#include "Utility/FAMP_ProjectilePool.h"
 #include "AMP_AMPManager.generated.h"
 
+class UNetworkTimeSyncComponent;
 class AAMP_PlayerController;
 class UAMP_ProjectileMovementComponent;
-struct FAMP_ProjectileData;
 
 UCLASS()
-class ADVANCEDMULTIPLAYERPROJECTILES_API AAMP_AMPManager : public AActor
+class ADVANCEDMULTIPLAYERPROJECTILES_API AAMP_AMPManager : public AInfo
 {
 	GENERATED_BODY()
 
@@ -24,12 +28,6 @@ public:
 	// Only use for debugging
 	UPROPERTY(EditAnywhere)
 	bool bShowServerProjectile{false};
-
-	// The interval in seconds to check the server for new projectiles to send to clients
-	// This should be as low as possible as it adds delay to the client seeing the projectile
-	UPROPERTY(EditAnywhere)
-	float ProjectileBufferInterval{0.005f};
-	float ProjectileBufferIntervalTimer{0.f};
 
 	// Whether to use a pool of projectiles
 	UPROPERTY(EditAnywhere)
@@ -45,6 +43,9 @@ public:
 	
 	UPROPERTY(EditAnywhere)
 	float PPNetRelevancyRange{10000.f};
+
+	UPROPERTY(EditAnywhere)
+	EAMP_LagCompensationMethod LagCompensationMethod{EAMP_LagCompensationMethod::PlayerPing};
 
 	// Spawn a single projectile
 	UFUNCTION(BlueprintCallable)
@@ -76,6 +77,8 @@ public:
 
 	// Server entry point for destroying projectiles
 	void DestroyProjectile(UAMP_ProjectileMovementComponent* DestroyedProjectile);
+
+	TObjectPtr<UNetworkTimeSubsystem> GetNetworkTimeSubsystem() const { return NetworkTimeSubsystem; }
 	
 protected:
 	// Called when the game starts or when spawned
@@ -140,5 +143,8 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<APlayerController> LocalPlayerController{nullptr};
+
+	UPROPERTY()
+	TObjectPtr<UNetworkTimeSubsystem> NetworkTimeSubsystem;
 
 };

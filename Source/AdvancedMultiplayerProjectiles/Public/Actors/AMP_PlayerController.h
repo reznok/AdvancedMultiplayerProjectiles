@@ -6,6 +6,7 @@
 #include "GameFramework/PlayerController.h"
 #include "AMP_PlayerController.generated.h"
 
+class UNetworkTimeSyncComponent;
 class UAMP_ProjectileMovementComponent;
 struct FAMP_ProjectileData;
 class AAMP_AMPManager;
@@ -16,6 +17,12 @@ UCLASS()
 class ADVANCEDMULTIPLAYERPROJECTILES_API AAMP_PlayerController : public APlayerController
 {
 	GENERATED_BODY()
+
+	// Add object initializer
+	AAMP_PlayerController(const FObjectInitializer& ObjectInitializer);
+	
+	UPROPERTY(EditAnywhere)
+	UNetworkTimeSyncComponent* NetworkTimeSyncComponent{nullptr};
 
 	virtual void BeginPlay() override;
 
@@ -46,5 +53,6 @@ public:
 	virtual bool ServerRPC_SpawnClientPredictedProjectiles_Validate(const TArray<FAMP_ProjectileData>& ProjectileData);
 	
 private:
-	TObjectPtr<AAMP_AMPManager> PredictedProjectileManager;
+	UPROPERTY()
+	TObjectPtr<AAMP_AMPManager> ProjectileManager;
 };

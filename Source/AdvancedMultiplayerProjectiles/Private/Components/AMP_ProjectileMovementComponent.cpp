@@ -97,27 +97,31 @@ void UAMP_ProjectileMovementComponent::CalcInterpolationTime_NetworkTimeSync()
 	// No interp for locally fired projectiles
 	if (ProjectileData.bIsLocallyFired) return;
 
-	// Even with NetworkTimeSync, ping is still used for forward interpolation
-	if (!ProjectileData.Owner->HasAuthority())
-	{
-		HalfRTT = (InterpolationType != EAMP_InterpolationType::None && GetNetMode() != NM_Standalone) ? (FMath::Clamp((GetClientPredictionTime() - PredictionFudgeFactor) * 0.0005f, 0.f, MaxPredictionPing / 1000)) : 0.f;
-		ForwardInterpolationTime = ProjectileData.SimulationDelay + HalfRTT * 2 * FMath::Clamp(ProjectileData.ForwardPredictionScale, 0.f, 1.f);
-	}
-		
+	const bool IsServer = ProjectileData.Owner->HasAuthority();
+	
 	const float CurrentTime = ProjectileManager->GetNetworkTimeSubsystem()->GetServerWorldTime();
-
+	float LocalClientDelay = CurrentTime - ProjectileData.ServerProjectileSpawnTime;
+	float ProjectileLagTime;
+	
 	if (ProjectileData.ClientProjectileSpawnTime != 0)
 	{
-		InterpolationTimeRemaining = (CurrentTime - ProjectileData.ClientProjectileSpawnTime) + .1f;
-	}
-	else if (ProjectileData.ServerProjectileSpawnTime != 0)
-	{
-		InterpolationTimeRemaining = CurrentTime - ProjectileData.ServerProjectileSpawnTime + PredictionFudgeFactor;
+		ProjectileLagTime = CurrentTime - ProjectileData.ClientProjectileSpawnTime;
 	}
 	else
 	{
-		UE_LOG(LogAMP, Error, TEXT("UAMP_ProjectileMovementComponent::CalcInterpolationTime_NetworkTimeSync: ProjectileData has no spawn time"));
+		ProjectileLagTime = CurrentTime - ProjectileData.ServerProjectileSpawnTime;
 	}
+
+	// Clamp the lag time to the max prediction ping
+	ProjectileLagTime = FMath::Clamp(ProjectileLagTime, 0.f, MaxPredictionPing / 2 / 1000);
+	
+	ProjectileLagTime += PredictionFudgeFactor * 0.001f;
+
+	InterpolationTimeRemaining += ProjectileLagTime;
+	ForwardInterpolationTime = (LocalClientDelay * FMath::Clamp(ProjectileData.ForwardPredictionScale, 0.f, 1.f));
+	
+	UE_LOG(LogAMP, Verbose, TEXT("[IsServer: %d] UAMP_ProjectileMovementComponent::CalcInterpolationTime_NetworkTimeSync: Forward Interpolation Time: %f"), IsServer, ForwardInterpolationTime);
+	UE_LOG(LogAMP, Verbose, TEXT("[IsServer: %d] UAMP_ProjectileMovementComponent::CalcInterpolationTime_NetworkTimeSync: Interpolation Time Remaining: %f"), IsServer, InterpolationTimeRemaining);
 }
 
 
@@ -148,9 +152,9 @@ void UAMP_ProjectileMovementComponent::InitializeProjectile()
 		case EAMP_LagCompensationMethod::NetworkTimeSync:
 			CalcInterpolationTime_NetworkTimeSync();
 			break;
-		case EAMP_LagCompensationMethod::PlayerPing:
-			CalcInterpolationTime_PlayerPing();
-			break;
+		// case EAMP_LagCompensationMethod::PlayerPing:
+		// 	CalcInterpolationTime_PlayerPing();
+		// 	break;
 	default:
 		UE_LOG(LogAMP, Error, TEXT("UAMP_ProjectileMovementComponent::InitializeProjectile: Lag Compensation Method not set"));
 		return;
@@ -317,7 +321,7 @@ void UAMP_ProjectileMovementComponent::TickComponent(float DeltaTime, ELevelTick
 		bForwardInterpolationStarted = true;
 		bFoundAdaptivePredictionHit = true;
 		InterpolationTimeRemaining += ForwardInterpolationTime;
-		UE_LOG(LogAMP, Warning, TEXT("UAMP_ProjectileMovementComponent::TickComponent: Adaptive Prediction Hit"));
+		UE_LOG(LogAMP, Verbose, TEXT("UAMP_ProjectileMovementComponent::TickComponent: Adaptive Prediction Hit"));
 	}
 
 	DeltaTime += HandleInterpolation(DeltaTime);

@@ -37,15 +37,15 @@ public:
 	TMap<UClass*, int32> StartingPoolSizes;
 
 	// Whether to use net relevancy for projectiles
-	// Requires players to have a PP_PlayerController
+	// Requires players to have an AMP_PlayerController
 	UPROPERTY(EditAnywhere)
-	bool bUsePPNetRelevancy{true};
+	bool bUseAMP_NetRelevancy{true};
 	
 	UPROPERTY(EditAnywhere)
-	float PPNetRelevancyRange{10000.f};
+	float AMP_NetRelevancyRange{10000.f};
 
 	UPROPERTY(EditAnywhere)
-	EAMP_LagCompensationMethod LagCompensationMethod{EAMP_LagCompensationMethod::PlayerPing};
+	EAMP_LagCompensationMethod LagCompensationMethod{EAMP_LagCompensationMethod::NetworkTimeSync};
 
 	// Spawn a single projectile
 	UFUNCTION(BlueprintCallable)

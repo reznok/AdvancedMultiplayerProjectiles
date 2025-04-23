@@ -132,7 +132,7 @@ protected:
 	// This is how Unreal Tournament does it
 	// https://github.com/JimmieKJ/unrealTournament/blob/cac883d9143e72d21c046bfa4a0915b3ad533dad/UnrealTournament/Source/UnrealTournament/Private/UTPlayerController.cpp#L281
 	UPROPERTY(EditAnywhere)
-	float PredictionFudgeFactor{.05f};
+	float PredictionFudgeFactor{0.f};
 	
 	virtual bool IsLocalPlayerInProjectilePath(bool DrawDebug = false);
 

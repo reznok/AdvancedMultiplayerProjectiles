@@ -188,7 +188,7 @@ void AAMP_AMPManager::ProcessServerProjectilesBuffers(float DeltaTime)
 	
 	if (ServerProjectilesBuffer.Num() > 0)
 	{
-		if (bUsePPNetRelevancy)
+		if (bUseAMP_NetRelevancy)
 		{
 			NetRelevant_SpawnProjectilesSimProxies(ServerProjectilesBuffer);
 		}
@@ -230,12 +230,12 @@ TObjectPtr<UAMP_ProjectileMovementComponent> AAMP_AMPManager::FireProjectile(FAM
 
 	switch (LagCompensationMethod)
 	{
-		case EAMP_LagCompensationMethod::PlayerPing:
-			if (GetLocalRole() == ROLE_Authority && ProjectileData.IsClientPredicted && ProjectileData.Owner)
-			{
-				ProjectileData.FiringClientDelay = GetServerPredictionTime(ProjectileData.Owner) * .0005f;
-			}
-			break;
+		// case EAMP_LagCompensationMethod::PlayerPing:
+		// 	if (GetLocalRole() == ROLE_Authority && ProjectileData.IsClientPredicted && ProjectileData.Owner)
+		// 	{
+		// 		ProjectileData.FiringClientDelay = GetServerPredictionTime(ProjectileData.Owner) * .0005f;
+		// 	}
+		// 	break;
 		case EAMP_LagCompensationMethod::NetworkTimeSync:
 			if (!NetworkTimeSubsystem)
 			{
@@ -324,7 +324,7 @@ void AAMP_AMPManager::DestroyProjectile(UAMP_ProjectileMovementComponent* Destro
 	// Notify clients to destroy the projectile
 	if (HasAuthority() && DestroyedProjectile->NotifyClientsOnDestroy())
 	{
-		if (bUsePPNetRelevancy)
+		if (bUseAMP_NetRelevancy)
 		{
 			NetRelevant_DestroyProjectileSimProxy(DestroyedProjectile->GetProjectileID());
 		}
@@ -401,13 +401,13 @@ void AAMP_AMPManager::AllocateStartingPools()
 bool AAMP_AMPManager::IsPlayerControllerRelevantForProjectile(const TObjectPtr<AAMP_PlayerController> PC, const FVector ProjectileLocation)
 {
 	if (!PC){ return false;}
-	if (!bUsePPNetRelevancy){ return true;}
+	if (!bUseAMP_NetRelevancy){ return true;}
 
 	if (PC->GetPawn())
 	{
 		float Distance = FVector::Dist(PC->GetPawn()->GetActorLocation(), ProjectileLocation);
 		// Always use spawn location from ProjectileData
-		return Distance <= PPNetRelevancyRange;
+		return Distance <= AMP_NetRelevancyRange;
 	}
 	return false;
 }

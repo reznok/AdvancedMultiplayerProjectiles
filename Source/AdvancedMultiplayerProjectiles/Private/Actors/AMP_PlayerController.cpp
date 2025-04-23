@@ -17,10 +17,6 @@ void AAMP_PlayerController::BeginPlay()
 	Super::BeginPlay();
 
 	ProjectileManager = UAMP_BlueprintFunctionLibrary::GetAMPManager(GetWorld());
-	if (NetworkTimeSyncComponent)
-	{
-		NetworkTimeSyncComponent->
-	}
 }
 
 UAMP_ProjectileMovementComponent* AAMP_PlayerController::SpawnClientPredictedProjectile(FAMP_ProjectileData ProjectileData)

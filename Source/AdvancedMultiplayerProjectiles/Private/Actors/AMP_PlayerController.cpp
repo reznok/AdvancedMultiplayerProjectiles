@@ -59,7 +59,7 @@ TArray<UAMP_ProjectileMovementComponent*> AAMP_PlayerController::SpawnClientPred
 	{
 		ServerRPC_SpawnClientPredictedProjectiles(ProjectileData);
 	}
-	return SpawnedProjectiles;
+	return SpawnedProjectiles; 
 }
 
 

@@ -102,6 +102,10 @@ protected:
 	UPROPERTY(EditAnywhere)
 	float SmoothingInterpSpeed = .1f;
 
+	// The maximum time in seconds a single interp step will take
+	UPROPERTY(EditAnywhere)
+	float MaxSmoothingInterpStep = 0.1f;
+
 	// Whether or not to actually interpolate. For non adaptive, this is always true at spawn
 	bool bForwardInterpolationStarted{false};
 	

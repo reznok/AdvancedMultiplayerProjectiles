@@ -114,8 +114,11 @@ void UAMP_ProjectileMovementComponent::CalcInterpolationTime_NetworkTimeSync()
 
 	// Clamp the lag time to the max prediction ping
 	ProjectileLagTime = FMath::Clamp(ProjectileLagTime, 0.f, MaxPredictionPing / 2 / 1000);
-	
-	ProjectileLagTime += PredictionFudgeFactor * 0.001f;
+
+	if (!ProjectileData.Owner->HasAuthority())
+	{
+		ProjectileLagTime += PredictionFudgeFactor * 0.001f;
+	}
 
 	InterpolationTimeRemaining += ProjectileLagTime;
 	ForwardInterpolationTime = (LocalClientDelay * FMath::Clamp(ProjectileData.ForwardPredictionScale, 0.f, 1.f));
@@ -215,7 +218,8 @@ float UAMP_ProjectileMovementComponent::SmoothToServerStateStep(float DeltaTime)
 	
 	if (InterpolationTimeRemaining > 0)
 	{
-		Step = InterpolationTimeRemaining * SmoothingInterpSpeed;
+		// Clamp step
+		Step = FMath::Clamp(InterpolationTimeRemaining * SmoothingInterpSpeed, 0.f, MaxSmoothingInterpStep);
 		InterpolationTimeRemaining -= Step;
 		
 		if (InterpolationTimeRemaining <= DeltaTime / 2.f)

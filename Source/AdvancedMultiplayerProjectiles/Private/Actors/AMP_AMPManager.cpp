@@ -17,6 +17,15 @@ AAMP_AMPManager::AAMP_AMPManager()
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.bStartWithTickEnabled = true;
 	PrimaryActorTick.bAllowTickOnDedicatedServer = true;
+
+	// The manager is a single global actor that fans cosmetic sim-proxy spawns
+	// out to clients via its NetMulticast RPCs. As an AInfo it has no world
+	// location, so without bAlwaysRelevant a distant client could be culled and
+	// never receive the multicast. Mark it always-relevant + replicated so the
+	// multicast path (used when the project does not use AAMP_PlayerController —
+	// see NetRelevant_SpawnProjectilesSimProxies) reliably reaches every client.
+	bReplicates = true;
+	bAlwaysRelevant = true;
 }
 
 // Called when the game starts or when spawned
@@ -87,12 +96,17 @@ void AAMP_AMPManager::NetRelevant_SpawnProjectilesSimProxies(const TArray<FAMP_P
 {
 	// Only run on the server
 	if (GetLocalRole() != ROLE_Authority) return;
-	
-	
-	// Get all player controllers
-	for (TActorIterator<AAMP_PlayerController> ActorItr(GetWorld()); ActorItr; ++ActorItr)
+
+	// Per-client, distance-culled delivery via AMP's own PlayerController RPC.
+	// This only reaches controllers that derive from AAMP_PlayerController, so we
+	// iterate the base APlayerController and cast — projects that subclass the AMP
+	// controller keep the culled per-client path.
+	int32 NumAMPControllers = 0;
+	for (TActorIterator<APlayerController> ActorItr(GetWorld()); ActorItr; ++ActorItr)
 	{
-		AAMP_PlayerController* PlayerController = *ActorItr;
+		AAMP_PlayerController* PlayerController = Cast<AAMP_PlayerController>(*ActorItr);
+		if (!PlayerController) continue;
+		++NumAMPControllers;
 
 		TArray<FAMP_ProjectileData> RelevantProjectiles;
 		for (auto Data : ProjectileData)
@@ -103,6 +117,17 @@ void AAMP_AMPManager::NetRelevant_SpawnProjectilesSimProxies(const TArray<FAMP_P
 			}
 		}
 		PlayerController->ClientRPC_SpawnProjectilesSimProxies(RelevantProjectiles);
+	}
+
+	// Fallback for projects that do NOT use AAMP_PlayerController (e.g. a GMC-based
+	// controller): the per-client RPC above reaches nobody, so the cosmetic
+	// projectile would never appear on any client. Deliver it class-agnostically
+	// via the always-relevant manager's NetMulticast so every client — including
+	// the firer — spawns the sim-proxy copy. Distance culling is not applied on
+	// this path (identical to bUseAMP_NetRelevancy == false).
+	if (NumAMPControllers == 0)
+	{
+		MultiCast_SpawnProjectilesSimProxies(ProjectileData);
 	}
 }
 
@@ -131,16 +156,26 @@ void AAMP_AMPManager::NetRelevant_DestroyProjectileSimProxy(const FGuid Projecti
 {
 	if (GetLocalRole() != ROLE_Authority) return;
 
-	// Get all player controllers
-	for (TActorIterator<AAMP_PlayerController> ActorItr(GetWorld()); ActorItr; ++ActorItr)
+	// Mirror of NetRelevant_SpawnProjectilesSimProxies: per-client culled delivery
+	// for AAMP_PlayerController, with a class-agnostic NetMulticast fallback when
+	// the project uses a different controller base.
+	int32 NumAMPControllers = 0;
+	for (TActorIterator<APlayerController> ActorItr(GetWorld()); ActorItr; ++ActorItr)
 	{
-		AAMP_PlayerController* PlayerController = *ActorItr;
-		
+		AAMP_PlayerController* PlayerController = Cast<AAMP_PlayerController>(*ActorItr);
+		if (!PlayerController) continue;
+		++NumAMPControllers;
+
 		TObjectPtr<UAMP_ProjectileMovementComponent> ProjectileComponent = SpawnedProjectiles.FindRef(ProjectileID);
 		if (ProjectileComponent && IsPlayerControllerRelevantForProjectile(PlayerController, ProjectileComponent->GetOwner()->GetActorLocation()))
 		{
 			PlayerController->ClientRPC_DestroyProjectileSimProxy(ProjectileID);
 		}
+	}
+
+	if (NumAMPControllers == 0)
+	{
+		MultiCast_DestroyProjectileSimProxy(ProjectileID);
 	}
 }
 

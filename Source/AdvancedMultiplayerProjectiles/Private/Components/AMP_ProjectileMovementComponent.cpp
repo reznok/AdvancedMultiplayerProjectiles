@@ -4,8 +4,11 @@
 #include "Components/AMP_ProjectileMovementComponent.h"
 
 #include "Actors/AMP_AMPManager.h"
+#include "CollisionQueryParams.h"
+#include "Engine/World.h"
 #include "GameFramework/PlayerState.h"
 #include "Kismet/GameplayStatics.h"
+#include "WorldCollision.h"
 
 
 // Sets default values for this component's properties
@@ -72,6 +75,7 @@ void UAMP_ProjectileMovementComponent::ResetProjectile()
 	bForwardInterpolationStarted = false;
 	bIsCheckingAdaptivePrediction = false;
 	bFoundAdaptivePredictionHit = false;
+	ReportedHitActors.Reset();
 }
 
 void UAMP_ProjectileMovementComponent::CalcInterpolationTime_PlayerPing()
@@ -165,6 +169,9 @@ void UAMP_ProjectileMovementComponent::InitializeProjectile()
 	
 	// ClientPredicted is always applied
 	LifeTime -= ClientPredictedInterpolationTime;
+
+	// Fresh flight — clear any actors carried over from a pooled reuse.
+	ReportedHitActors.Reset();
 
 	const bool FiredLocally = ProjectileData.IsClientPredicted && !ProjectileData.bIsServerSpawned;
 	
@@ -328,10 +335,61 @@ void UAMP_ProjectileMovementComponent::TickComponent(float DeltaTime, ELevelTick
 		UE_LOG(LogAMP, Verbose, TEXT("UAMP_ProjectileMovementComponent::TickComponent: Adaptive Prediction Hit"));
 	}
 
+	const FVector PreMoveLocation = GetOwner() ? GetOwner()->GetActorLocation() : FVector::ZeroVector;
+
 	DeltaTime += HandleInterpolation(DeltaTime);
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
+	// Server-authoritative hit reporting along the segment just travelled.
+	if (ProjectileData.Owner && ProjectileData.Owner->HasAuthority() && GetOwner())
+	{
+		DetectAndReportHits(PreMoveLocation, GetOwner()->GetActorLocation());
+	}
+
 	// ...
+}
+
+void UAMP_ProjectileMovementComponent::DetectAndReportHits(const FVector& StartLocation, const FVector& EndLocation)
+{
+	if (!OnProjectileHit.IsBound()) return;
+
+	UWorld* World = GetWorld();
+	if (!World) return;
+
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(AMPProjectileHit), false);
+	Params.AddIgnoredActor(GetOwner());
+	if (ProjectileData.Owner)
+	{
+		Params.AddIgnoredActor(ProjectileData.Owner);
+	}
+
+	FCollisionObjectQueryParams ObjectParams;
+	ObjectParams.AddObjectTypesToQuery(ECC_Pawn);
+
+	// SweepMulti needs a non-degenerate segment; nudge the end if the projectile
+	// did not move this tick so a resting overlap is still caught.
+	const FVector SweepEnd = (EndLocation - StartLocation).IsNearlyZero()
+		                         ? EndLocation + FVector(0.f, 0.f, KINDA_SMALL_NUMBER)
+		                         : EndLocation;
+
+	TArray<FHitResult> Hits;
+	const bool bAnyHit = World->SweepMultiByObjectType(
+		Hits, StartLocation, SweepEnd, FQuat::Identity, ObjectParams,
+		FCollisionShape::MakeSphere(FMath::Max(HitDetectionRadius, 1.f)), Params);
+
+	if (!bAnyHit) return;
+
+	for (const FHitResult& Hit : Hits)
+	{
+		AActor* HitActor = Hit.GetActor();
+		if (!HitActor) continue;
+
+		bool bAlreadyReported = false;
+		ReportedHitActors.Add(HitActor, &bAlreadyReported);
+		if (bAlreadyReported) continue;
+
+		OnProjectileHit.Broadcast(HitActor, Hit.ImpactPoint);
+	}
 }
 
 

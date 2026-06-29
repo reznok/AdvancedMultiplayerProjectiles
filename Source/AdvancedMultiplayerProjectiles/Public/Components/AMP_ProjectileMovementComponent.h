@@ -140,6 +140,23 @@ protected:
 	
 	virtual bool IsLocalPlayerInProjectilePath(bool DrawDebug = false);
 
+	// Server-authoritative hit detection. Sweeps the segment the projectile
+	// moved this tick for Pawn overlaps and broadcasts OnProjectileHit once per
+	// newly-encountered actor (owner + projectile excluded). Consumers run all
+	// gameplay from this on authority only — the projectile owns no gameplay
+	// state. Runs only when OnProjectileHit is bound, so unbound projectiles
+	// pay nothing and existing behaviour is unchanged.
+	virtual void DetectAndReportHits(const FVector& StartLocation, const FVector& EndLocation);
+
+	// Radius (uu) of the server-side hit-detection sweep. Clamped to >= 1.
+	UPROPERTY(EditAnywhere)
+	float HitDetectionRadius{20.f};
+
+	// Actors already reported via OnProjectileHit this flight, so each is
+	// reported at most once. Cleared on (re)initialize and pool reset.
+	UPROPERTY()
+	TSet<TObjectPtr<AActor>> ReportedHitActors;
+
 public:
 	// Called every frame
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;

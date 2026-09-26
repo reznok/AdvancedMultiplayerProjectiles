@@ -341,7 +341,9 @@ void UAMP_ProjectileMovementComponent::TickComponent(float DeltaTime, ELevelTick
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
 	// Server-authoritative hit reporting along the segment just travelled.
-	if (ProjectileData.Owner && ProjectileData.Owner->HasAuthority() && GetOwner())
+	// Gate on the net mode, not the firing actor's authority: projectiles keep
+	// detecting hits after their shooter is destroyed (e.g. died mid-flight).
+	if (GetNetMode() != NM_Client && GetOwner())
 	{
 		DetectAndReportHits(PreMoveLocation, GetOwner()->GetActorLocation());
 	}

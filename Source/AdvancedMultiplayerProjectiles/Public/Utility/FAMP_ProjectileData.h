@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "CoreMinimal.h"
 #include "EAMP_InterpolationType.h"
 #include "FAMP_ProjectileData.generated.h"
@@ -8,13 +8,13 @@ struct FFloatVector{
 	GENERATED_BODY()
 	
 	UPROPERTY()
-	float X;
+	float X{0.f};
 	
 	UPROPERTY()
-	float Y;
+	float Y{0.f};
 	
 	UPROPERTY()
-	float Z;
+	float Z{0.f};
 };
 
 /**
@@ -80,11 +80,11 @@ struct ADVANCEDMULTIPLAYERPROJECTILES_API FAMP_ProjectileData
 
 	// The time the projectile was spawned on the client (NetworkTimeSync)
 	UPROPERTY()
-	float ClientProjectileSpawnTime;
+	float ClientProjectileSpawnTime{0.f};
 
 	// The time the projectile was spawned on the server (NetworkTimeSync)
 	UPROPERTY()
-	float ServerProjectileSpawnTime;
+	float ServerProjectileSpawnTime{0.f};
 
 	UPROPERTY()
 	FGuid ProjectileID{};

@@ -131,6 +131,8 @@ protected:
 
 	uint8 EndCode{AMP_EndCode::Destroyed};
 	FVector EndLocation{FVector::ZeroVector};
+	// EndLocation was decided for this flight (EndProjectileAt, or the first DestroyProjectile)
+	bool bEndLocationSet{false};
 
 	// How far behind the sim proxy is in time
 	float HalfRTT{0.f};

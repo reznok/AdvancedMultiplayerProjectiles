@@ -25,9 +25,10 @@ UAMP_ProjectileMovementComponent::UAMP_ProjectileMovementComponent()
 
 void UAMP_ProjectileMovementComponent::DestroyProjectile()
 {
-	if (EndLocation.IsZero() && GetOwner())
+	if (!bEndLocationSet && GetOwner())
 	{
 		EndLocation = GetOwner()->GetActorLocation();
+		bEndLocationSet = true;
 	}
 	if (ProjectileManager)
 	{
@@ -46,6 +47,7 @@ void UAMP_ProjectileMovementComponent::EndProjectileAt(const FVector& Location, 
 {
 	EndCode = InEndCode;
 	EndLocation = Location;
+	bEndLocationSet = true;
 	DestroyProjectile();
 }
 
@@ -80,6 +82,12 @@ void UAMP_ProjectileMovementComponent::ApplyRedirect(const FAMP_ProjectileRedire
 	const UNetworkTimeSubsystem* TimeSubsystem = ProjectileManager ? ProjectileManager->GetNetworkTimeSubsystem().Get() : nullptr;
 	const float Now = TimeSubsystem ? TimeSubsystem->GetServerWorldTime() : Redirect.ServerTime;
 	InterpolationTimeRemaining = FMath::Clamp(Now - Redirect.ServerTime, 0.f, MaxPredictionPing / 2 / 1000);
+	// Unsmoothed copies (InterpolationType None, e.g. the firing client's predicted copy) never consume the catch-up
+	// in their tick: snap it now, or they trail the server's flight by the one-way delay
+	if (InterpolationType == EAMP_InterpolationType::None && InterpolationTimeRemaining > 0.f)
+	{
+		SnapInterpolation();
+	}
 
 	// The new path may threaten the local player (or stop threatening it): ask again
 	bFoundAdaptivePredictionHit = false;
@@ -120,6 +128,7 @@ void UAMP_ProjectileMovementComponent::SetProjectileData(const FAMP_ProjectileDa
 	ForwardInterpolationTime = 0.0f;
 	EndCode = AMP_EndCode::Destroyed;
 	EndLocation = FVector::ZeroVector;
+	bEndLocationSet = false;
 	AdaptivePredictionCheckTimer = 0.f;
 
 	InitializeProjectile();

@@ -116,6 +116,10 @@ protected:
 	// Process the queued projectiles, firing if the delay has expired
 	virtual void ProcessQueuedProjectiles(float DeltaTime);
 
+	// Client: fire a queued projectile now (an end or redirect for it arrived before the manager's tick); null when
+	// none is queued with that id
+	UAMP_ProjectileMovementComponent* FireQueuedProjectile(const FGuid& ProjectileID);
+
 	// Process the server spawned and destroyed projectiles buffers
 	virtual void ProcessServerProjectilesBuffers(float DeltaTime);
 

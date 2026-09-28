@@ -163,6 +163,9 @@ TArray<UAMP_ProjectileMovementComponent*> AAMP_AMPManager::SpawnLocalPredictedPr
 		{
 			if (Data.PredictionKey != 0)
 			{
+				// A live key spawned again is a caller bug (e.g. spawning on a replayed move)
+				ensureMsgf(!PredictedProjectiles.Contains(Data.PredictionKey),
+					TEXT("AAMP_AMPManager::SpawnLocalPredictedProjectiles: prediction key %lld is already live"), Data.PredictionKey);
 				PredictedProjectiles.Add(Data.PredictionKey, ProjectileCmp);
 			}
 			Spawned.Add(ProjectileCmp);
@@ -209,10 +212,31 @@ void AAMP_AMPManager::EndProjectileSimProxy(const FAMP_ProjectileEnd& End)
 	// Projectile is already ended on the server
 	if (GetLocalRole() == ROLE_Authority) return;
 
-	if (UAMP_ProjectileMovementComponent* ProjectileComponent = FindProjectile(End.ProjectileID, End.PredictionKey))
+	UAMP_ProjectileMovementComponent* ProjectileComponent = FindProjectile(End.ProjectileID, End.PredictionKey);
+	if (!ProjectileComponent)
+	{
+		// Its spawn arrived in the same bunch and still waits in the queue: fire it now, so it still ends here
+		ProjectileComponent = FireQueuedProjectile(End.ProjectileID);
+	}
+	if (ProjectileComponent)
 	{
 		ProjectileComponent->ApplyEnd(End);
 	}
+}
+
+UAMP_ProjectileMovementComponent* AAMP_AMPManager::FireQueuedProjectile(const FGuid& ProjectileID)
+{
+	if (!ProjectileID.IsValid()) return nullptr;
+
+	const int32 Index = QueuedProjectiles.IndexOfByPredicate([&ProjectileID](const TTuple<float, FAMP_ProjectileData>& Queued)
+	{
+		return Queued.Get<1>().ProjectileID == ProjectileID;
+	});
+	if (Index == INDEX_NONE) return nullptr;
+
+	FAMP_ProjectileData Data = QueuedProjectiles[Index].Get<1>();
+	QueuedProjectiles.RemoveAt(Index);
+	return FireProjectile(Data);
 }
 
 UAMP_ProjectileMovementComponent* AAMP_AMPManager::FindProjectile(const FGuid& ProjectileID, const int64 PredictionKey) const
@@ -252,6 +276,9 @@ void AAMP_AMPManager::RedirectProjectile(UAMP_ProjectileMovementComponent* Proje
 	Redirect.Location = Projectile->GetOwner()->GetActorLocation();
 	Redirect.Velocity = NewVelocity;
 	Redirect.ServerTime = NetworkTimeSubsystem ? NetworkTimeSubsystem->GetServerWorldTime() : 0.f;
+
+	// Spawns wait for the manager's tick: send them first, so a projectile spawned this frame exists on clients
+	ProcessServerProjectilesBuffers(0.f);
 	if (bUseAMP_NetRelevancy)
 	{
 		NetRelevant_RedirectProjectileSimProxy(Redirect);
@@ -296,7 +323,13 @@ void AAMP_AMPManager::RedirectProjectileSimProxy(const FAMP_ProjectileRedirect& 
 {
 	if (GetLocalRole() == ROLE_Authority) return;
 
-	if (UAMP_ProjectileMovementComponent* ProjectileComponent = FindProjectile(Redirect.ProjectileID, Redirect.PredictionKey))
+	UAMP_ProjectileMovementComponent* ProjectileComponent = FindProjectile(Redirect.ProjectileID, Redirect.PredictionKey);
+	if (!ProjectileComponent)
+	{
+		// Its spawn arrived in the same bunch and still waits in the queue: fire it now, so it still turns here
+		ProjectileComponent = FireQueuedProjectile(Redirect.ProjectileID);
+	}
+	if (ProjectileComponent)
 	{
 		ProjectileComponent->ApplyRedirect(Redirect);
 	}
@@ -468,7 +501,7 @@ bool AAMP_AMPManager::DestroyProjectile(UAMP_ProjectileMovementComponent* Destro
 
 	// Every machine forgets the id, so a late message for it can never reach this pooled actor's next flight
 	SpawnedProjectiles.Remove(ProjectileID);
-	if (End.PredictionKey != 0 && !HasAuthority())
+	if (End.PredictionKey != 0 && !HasAuthority() && PredictedProjectiles.FindRef(End.PredictionKey) == DestroyedProjectile)
 	{
 		PredictedProjectiles.Remove(End.PredictionKey);
 	}
@@ -485,6 +518,8 @@ bool AAMP_AMPManager::DestroyProjectile(UAMP_ProjectileMovementComponent* Destro
 
 	if (bNotifyClients)
 	{
+		// Spawns wait for the manager's tick: send them first, so a projectile spawned this frame exists on clients
+		ProcessServerProjectilesBuffers(0.f);
 		if (bUseAMP_NetRelevancy)
 		{
 			NetRelevant_EndProjectileSimProxy(End);

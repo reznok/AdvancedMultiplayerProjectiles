@@ -41,7 +41,7 @@ Server-spawned projectiles are shown on clients through the manager (replicated,
 
 When the game's own predicted logic runs on the firing client and on the server (for example a GMAS or GMC ability), let each side spawn its own copy and link them with a key:
 1. **Firing client**, on the live (non-replayed) run: `Manager->SpawnLocalPredictedProjectiles(Data)` with `Data.PredictionKey` set. No RPC is sent.
-2. **Server**, running the same logic: `Manager->SpawnProjectile(Data)` with the same `PredictionKey`, `IsClientPredicted = true`, `ClientProjectileSpawnTime` = the client's fire time in NetworkTimeSync server time, and `InterpolationType = Snap`, so the authoritative copy is fast-forwarded to the client's timeline (clamped by `MaxPredictionPing`). The firing client never shows the server copy.
+2. **Server**, running the same logic: `Manager->SpawnProjectile(Data)` with the same `PredictionKey`, `IsClientPredicted = true`, `ClientProjectileSpawnTime` = the client's fire time in NetworkTimeSync server time, and `InterpolationType = Snap`, so the authoritative copy is fast-forwarded to the client's timeline (clamped by `MaxPredictionPing`). The firing client never shows the server copy: it is skipped by its owner pawn, or by the live predicted copy with its key (the pawn may be gone, e.g. dead, while its shots still fly).
 3. **Other clients** get the server copy through the normal sim-proxy path and catch up.
 
 Keys must be unique per shot across all players.
@@ -50,6 +50,10 @@ Keys must be unique per shot across all players.
 
 - End a flight on the server with `EndProjectileAt(Location, EndCode)` (or `DestroyProjectile()`, code 0). Every client copy, including the firing client's predicted copy (matched by `PredictionKey`), snaps to `Location` and ends; read `GetEndCode()`/`GetEndLocation()` in `OnProjectileDestroyed` to play the game's detonation cosmetics.
 - Change a flight on the server with `Manager->RedirectProjectile(Projectile, NewVelocity)`. Client copies are re-placed, catch up from the server's time and fire `OnProjectileRedirected`; adaptive prediction is asked again.
+
+## Message batching
+
+The server buffers each tick's spawn, redirect and end messages and sends them from the manager's tick as one call per kind (arrays), in that order, so a projectile spawned and ended within one tick reaches clients spawn first. The manager replicates at 100 Hz and forces a net update on every tick that sends. Why: unreliable multicasts wait for the actor's next net update, and UE keeps at most `net.MaxRPCPerNetUpdate` (default 2) calls to one function per update, dropping the rest with only a `LogRep` Verbose "Too many calls" line. One call per projectile from a 10 Hz `AInfo` lost most end messages and spawn batches under fire: firing clients' predicted copies flew through their targets, and other clients missed shots.
 
 ## Adaptive forward prediction
 

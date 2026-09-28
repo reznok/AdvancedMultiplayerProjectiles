@@ -26,6 +26,12 @@ AAMP_AMPManager::AAMP_AMPManager()
 	// see NetRelevant_SpawnProjectilesSimProxies) reliably reaches every client.
 	bReplicates = true;
 	bAlwaysRelevant = true;
+
+	// Unreliable multicasts wait for the actor's next net update, and UE keeps only net.MaxRPCPerNetUpdate (default 2)
+	// calls to one function per update, silently dropping the rest. AInfo's 10 Hz would hold several ticks' messages per
+	// update and lose most of them under fire; at 100 Hz the manager replicates every server frame (dedicated servers tick
+	// slower than that), and each tick sends one batch per message kind (ProcessServerProjectilesBuffers).
+	SetNetUpdateFrequency(100.f);
 }
 
 // Called when the game starts or when spawned
@@ -174,15 +180,18 @@ TArray<UAMP_ProjectileMovementComponent*> AAMP_AMPManager::SpawnLocalPredictedPr
 	return Spawned;
 }
 
-void AAMP_AMPManager::MultiCast_EndProjectileSimProxy_Implementation(const FAMP_ProjectileEnd& End)
+void AAMP_AMPManager::MultiCast_EndProjectilesSimProxies_Implementation(const TArray<FAMP_ProjectileEnd>& Ends)
 {
-	// The server already ended it
+	// The server already ended them
 	if (GetLocalRole() == ROLE_Authority) return;
 
-	EndProjectileSimProxy(End);
+	for (const FAMP_ProjectileEnd& End : Ends)
+	{
+		EndProjectileSimProxy(End);
+	}
 }
 
-void AAMP_AMPManager::NetRelevant_EndProjectileSimProxy(const FAMP_ProjectileEnd& End)
+void AAMP_AMPManager::NetRelevant_EndProjectilesSimProxies(const TArray<FAMP_ProjectileEnd>& Ends)
 {
 	if (GetLocalRole() != ROLE_Authority) return;
 
@@ -195,15 +204,23 @@ void AAMP_AMPManager::NetRelevant_EndProjectileSimProxy(const FAMP_ProjectileEnd
 		if (!PlayerController) continue;
 		++NumAMPControllers;
 
-		if (IsPlayerControllerRelevantForProjectile(PlayerController, End.Location))
+		TArray<FAMP_ProjectileEnd> RelevantEnds;
+		for (const FAMP_ProjectileEnd& End : Ends)
 		{
-			PlayerController->ClientRPC_EndProjectileSimProxy(End);
+			if (IsPlayerControllerRelevantForProjectile(PlayerController, End.Location))
+			{
+				RelevantEnds.Add(End);
+			}
+		}
+		if (RelevantEnds.Num() > 0)
+		{
+			PlayerController->ClientRPC_EndProjectilesSimProxies(RelevantEnds);
 		}
 	}
 
 	if (NumAMPControllers == 0)
 	{
-		MultiCast_EndProjectileSimProxy(End);
+		MultiCast_EndProjectilesSimProxies(Ends);
 	}
 }
 
@@ -212,12 +229,10 @@ void AAMP_AMPManager::EndProjectileSimProxy(const FAMP_ProjectileEnd& End)
 	// Projectile is already ended on the server
 	if (GetLocalRole() == ROLE_Authority) return;
 
+	// Its spawn may have arrived in the same bunch and still wait in the queue: fire it first (the firing client skips it),
+	// so it ends here instead of flying on after this message
+	FireQueuedProjectile(End.ProjectileID);
 	UAMP_ProjectileMovementComponent* ProjectileComponent = FindProjectile(End.ProjectileID, End.PredictionKey);
-	if (!ProjectileComponent)
-	{
-		// Its spawn arrived in the same bunch and still waits in the queue: fire it now, so it still ends here
-		ProjectileComponent = FireQueuedProjectile(End.ProjectileID);
-	}
 	if (ProjectileComponent)
 	{
 		ProjectileComponent->ApplyEnd(End);
@@ -277,26 +292,21 @@ void AAMP_AMPManager::RedirectProjectile(UAMP_ProjectileMovementComponent* Proje
 	Redirect.Velocity = NewVelocity;
 	Redirect.ServerTime = NetworkTimeSubsystem ? NetworkTimeSubsystem->GetServerWorldTime() : 0.f;
 
-	// Spawns wait for the manager's tick: send them first, so a projectile spawned this frame exists on clients
-	ProcessServerProjectilesBuffers(0.f);
-	if (bUseAMP_NetRelevancy)
-	{
-		NetRelevant_RedirectProjectileSimProxy(Redirect);
-	}
-	else
-	{
-		MultiCast_RedirectProjectileSimProxy(Redirect);
-	}
+	// Sent with the tick's batch, after its spawns (a projectile spawned this tick exists on clients first)
+	ServerRedirectBuffer.Add(Redirect);
 }
 
-void AAMP_AMPManager::MultiCast_RedirectProjectileSimProxy_Implementation(const FAMP_ProjectileRedirect& Redirect)
+void AAMP_AMPManager::MultiCast_RedirectProjectilesSimProxies_Implementation(const TArray<FAMP_ProjectileRedirect>& Redirects)
 {
 	if (GetLocalRole() == ROLE_Authority) return;
 
-	RedirectProjectileSimProxy(Redirect);
+	for (const FAMP_ProjectileRedirect& Redirect : Redirects)
+	{
+		RedirectProjectileSimProxy(Redirect);
+	}
 }
 
-void AAMP_AMPManager::NetRelevant_RedirectProjectileSimProxy(const FAMP_ProjectileRedirect& Redirect)
+void AAMP_AMPManager::NetRelevant_RedirectProjectilesSimProxies(const TArray<FAMP_ProjectileRedirect>& Redirects)
 {
 	if (GetLocalRole() != ROLE_Authority) return;
 
@@ -307,15 +317,23 @@ void AAMP_AMPManager::NetRelevant_RedirectProjectileSimProxy(const FAMP_Projecti
 		if (!PlayerController) continue;
 		++NumAMPControllers;
 
-		if (IsPlayerControllerRelevantForProjectile(PlayerController, Redirect.Location))
+		TArray<FAMP_ProjectileRedirect> RelevantRedirects;
+		for (const FAMP_ProjectileRedirect& Redirect : Redirects)
 		{
-			PlayerController->ClientRPC_RedirectProjectileSimProxy(Redirect);
+			if (IsPlayerControllerRelevantForProjectile(PlayerController, Redirect.Location))
+			{
+				RelevantRedirects.Add(Redirect);
+			}
+		}
+		if (RelevantRedirects.Num() > 0)
+		{
+			PlayerController->ClientRPC_RedirectProjectilesSimProxies(RelevantRedirects);
 		}
 	}
 
 	if (NumAMPControllers == 0)
 	{
-		MultiCast_RedirectProjectileSimProxy(Redirect);
+		MultiCast_RedirectProjectilesSimProxies(Redirects);
 	}
 }
 
@@ -323,13 +341,10 @@ void AAMP_AMPManager::RedirectProjectileSimProxy(const FAMP_ProjectileRedirect& 
 {
 	if (GetLocalRole() == ROLE_Authority) return;
 
-	UAMP_ProjectileMovementComponent* ProjectileComponent = FindProjectile(Redirect.ProjectileID, Redirect.PredictionKey);
-	if (!ProjectileComponent)
-	{
-		// Its spawn arrived in the same bunch and still waits in the queue: fire it now, so it still turns here
-		ProjectileComponent = FireQueuedProjectile(Redirect.ProjectileID);
-	}
-	if (ProjectileComponent)
+	// Its spawn may have arrived in the same bunch and still wait in the queue: fire it first (the firing client skips it),
+	// so it still turns here
+	FireQueuedProjectile(Redirect.ProjectileID);
+	if (UAMP_ProjectileMovementComponent* ProjectileComponent = FindProjectile(Redirect.ProjectileID, Redirect.PredictionKey))
 	{
 		ProjectileComponent->ApplyRedirect(Redirect);
 	}
@@ -363,7 +378,13 @@ void AAMP_AMPManager::ProcessQueuedProjectiles(const float DeltaTime)
 void AAMP_AMPManager::ProcessServerProjectilesBuffers(float DeltaTime)
 {
 	if (!HasAuthority()) return;
-	
+
+	// One call per message kind per tick, never one per projectile: UE keeps at most net.MaxRPCPerNetUpdate (default 2)
+	// calls to one unreliable multicast per net update and silently drops the rest. Order matters: a projectile spawned
+	// and redirected or ended within one tick reaches clients spawn first (the client fires a queued spawn early when its
+	// end or redirect arrives in the same bunch: FireQueuedProjectile).
+	const bool bSending = ServerProjectilesBuffer.Num() > 0 || ServerRedirectBuffer.Num() > 0 || ServerEndBuffer.Num() > 0;
+
 	if (ServerProjectilesBuffer.Num() > 0)
 	{
 		if (bUseAMP_NetRelevancy)
@@ -376,6 +397,42 @@ void AAMP_AMPManager::ProcessServerProjectilesBuffers(float DeltaTime)
 		}
 
 		ServerProjectilesBuffer.Empty();
+	}
+
+	if (ServerRedirectBuffer.Num() > 0)
+	{
+		if (bUseAMP_NetRelevancy)
+		{
+			NetRelevant_RedirectProjectilesSimProxies(ServerRedirectBuffer);
+		}
+		else
+		{
+			MultiCast_RedirectProjectilesSimProxies(ServerRedirectBuffer);
+		}
+
+		ServerRedirectBuffer.Empty();
+	}
+
+	if (ServerEndBuffer.Num() > 0)
+	{
+		if (bUseAMP_NetRelevancy)
+		{
+			NetRelevant_EndProjectilesSimProxies(ServerEndBuffer);
+		}
+		else
+		{
+			MultiCast_EndProjectilesSimProxies(ServerEndBuffer);
+		}
+
+		ServerEndBuffer.Empty();
+	}
+
+	if (bSending)
+	{
+		// Replicate this frame even when the server ticks faster than NetUpdateFrequency (PIE, listen servers): queued
+		// multicasts leave with the next net update, and a second tick's batch waiting for the same update could exceed
+		// the per-update limit again.
+		ForceNetUpdate();
 	}
 }
 
@@ -437,12 +494,16 @@ TObjectPtr<UAMP_ProjectileMovementComponent> AAMP_AMPManager::FireProjectile(FAM
 		return nullptr;
 	}
 
-	// If the projectile is client predicted and the owner is the local player, and we're not showing server projectiles, don't spawn the projectile
+	// If the projectile is client predicted and the owner is the local player, and we're not showing server projectiles, don't spawn the projectile.
+	// The firing client also knows its shots by their live predicted copy: its pawn may already be gone (dead, unpossessed)
+	// while its shots still fly, and a second copy here would take the server's end message (found by id first) while the
+	// predicted copy flew on.
 	APlayerController* LocalPC = GetLocalPlayerController();
+	const bool bLocalPrediction = ProjectileData.PredictionKey != 0 && PredictedProjectiles.Contains(ProjectileData.PredictionKey);
 	if (ProjectileData.IsClientPredicted &&
 		ProjectileData.bIsServerSpawned &&
 		!bShowServerProjectile &&
-		(LocalPC && (ProjectileData.Owner == LocalPC || ProjectileData.Owner == LocalPC->GetPawn())))
+		(bLocalPrediction || (LocalPC && (ProjectileData.Owner == LocalPC || ProjectileData.Owner == LocalPC->GetPawn()))))
 	{
 		// UE_LOG(LogTemp, Warning, TEXT("UPP_PredProjectileFiringComponent::FireProjectile: Not spawning client predicted projectile for local player"));
 		return nullptr;
@@ -518,16 +579,8 @@ bool AAMP_AMPManager::DestroyProjectile(UAMP_ProjectileMovementComponent* Destro
 
 	if (bNotifyClients)
 	{
-		// Spawns wait for the manager's tick: send them first, so a projectile spawned this frame exists on clients
-		ProcessServerProjectilesBuffers(0.f);
-		if (bUseAMP_NetRelevancy)
-		{
-			NetRelevant_EndProjectileSimProxy(End);
-		}
-		else
-		{
-			MultiCast_EndProjectileSimProxy(End);
-		}
+		// Sent with the tick's batch, after its spawns and redirects (ProcessServerProjectilesBuffers)
+		ServerEndBuffer.Add(End);
 	}
 	return true;
 }

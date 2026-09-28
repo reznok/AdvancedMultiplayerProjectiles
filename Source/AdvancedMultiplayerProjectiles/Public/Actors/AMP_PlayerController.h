@@ -32,13 +32,13 @@ public:
 	UFUNCTION(Client, UnReliable)
 	virtual void ClientRPC_SpawnProjectilesSimProxies(const TArray<FAMP_ProjectileData>& ProjectileData);
 
-	// Tell this client a projectile ended
+	// Tell this client that projectiles ended (one tick's batch)
 	UFUNCTION(Client, UnReliable)
-	virtual void ClientRPC_EndProjectileSimProxy(const FAMP_ProjectileEnd& End);
+	virtual void ClientRPC_EndProjectilesSimProxies(const TArray<FAMP_ProjectileEnd>& Ends);
 
-	// Tell this client a projectile was redirected
+	// Tell this client that projectiles were redirected (one tick's batch)
 	UFUNCTION(Client, UnReliable)
-	virtual void ClientRPC_RedirectProjectileSimProxy(const FAMP_ProjectileRedirect& Redirect);
+	virtual void ClientRPC_RedirectProjectilesSimProxies(const TArray<FAMP_ProjectileRedirect>& Redirects);
 
 	UFUNCTION(BlueprintCallable)
 	virtual UAMP_ProjectileMovementComponent* SpawnClientPredictedProjectile(FAMP_ProjectileData ProjectileData);

@@ -81,19 +81,25 @@ bool AAMP_PlayerController::ServerRPC_SpawnClientPredictedProjectiles_Validate(c
 	return true;
 }
 
-void AAMP_PlayerController::ClientRPC_EndProjectileSimProxy_Implementation(const FAMP_ProjectileEnd& End)
+void AAMP_PlayerController::ClientRPC_EndProjectilesSimProxies_Implementation(const TArray<FAMP_ProjectileEnd>& Ends)
 {
 	if (ProjectileManager)
 	{
-		ProjectileManager->EndProjectileSimProxy(End);
+		for (const FAMP_ProjectileEnd& End : Ends)
+		{
+			ProjectileManager->EndProjectileSimProxy(End);
+		}
 	}
 }
 
-void AAMP_PlayerController::ClientRPC_RedirectProjectileSimProxy_Implementation(const FAMP_ProjectileRedirect& Redirect)
+void AAMP_PlayerController::ClientRPC_RedirectProjectilesSimProxies_Implementation(const TArray<FAMP_ProjectileRedirect>& Redirects)
 {
 	if (ProjectileManager)
 	{
-		ProjectileManager->RedirectProjectileSimProxy(Redirect);
+		for (const FAMP_ProjectileRedirect& Redirect : Redirects)
+		{
+			ProjectileManager->RedirectProjectileSimProxy(Redirect);
+		}
 	}
 }
 

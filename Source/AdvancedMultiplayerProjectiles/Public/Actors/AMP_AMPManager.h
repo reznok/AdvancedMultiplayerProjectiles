@@ -70,26 +70,29 @@ public:
 	// server spawns its own authoritative copy (give both the same PredictionKey). Client only; returns the spawned copies.
 	virtual TArray<UAMP_ProjectileMovementComponent*> SpawnLocalPredictedProjectiles(TArray<FAMP_ProjectileData>& ProjectilesData);
 
-	// Tell sim proxies (and the firing client's predicted copy) a projectile ended
+	// Tell sim proxies (and the firing client's predicted copy) that projectiles ended (one tick's batch)
 	UFUNCTION(NetMulticast, UnReliable)
-	virtual void MultiCast_EndProjectileSimProxy(const FAMP_ProjectileEnd& End);
+	virtual void MultiCast_EndProjectilesSimProxies(const TArray<FAMP_ProjectileEnd>& Ends);
 
-	// Runs on server, finds all PlayerControllers near the ended projectile and tells them
-	virtual void NetRelevant_EndProjectileSimProxy(const FAMP_ProjectileEnd& End);
+	// Runs on server, finds all PlayerControllers near the ended projectiles and tells them
+	virtual void NetRelevant_EndProjectilesSimProxies(const TArray<FAMP_ProjectileEnd>& Ends);
 
 	// Runs on client
 	virtual void EndProjectileSimProxy(const FAMP_ProjectileEnd& End);
 
-	// Entry point for destroying projectiles (server: also notifies clients). False when it was already destroyed.
+	// Entry point for destroying projectiles (server: also notifies clients with the tick's batch). False when it was
+	// already destroyed.
 	bool DestroyProjectile(UAMP_ProjectileMovementComponent* DestroyedProjectile);
 
-	// Server: give a projectile a new velocity and tell every client copy
+	// Server: give a projectile a new velocity and tell every client copy (with the tick's batch)
 	virtual void RedirectProjectile(UAMP_ProjectileMovementComponent* Projectile, const FVector& NewVelocity);
 
+	// Tell sim proxies (and the firing client's predicted copy) that projectiles were redirected (one tick's batch)
 	UFUNCTION(NetMulticast, UnReliable)
-	virtual void MultiCast_RedirectProjectileSimProxy(const FAMP_ProjectileRedirect& Redirect);
+	virtual void MultiCast_RedirectProjectilesSimProxies(const TArray<FAMP_ProjectileRedirect>& Redirects);
 
-	virtual void NetRelevant_RedirectProjectileSimProxy(const FAMP_ProjectileRedirect& Redirect);
+	// Runs on server, finds all PlayerControllers near the redirected projectiles and tells them
+	virtual void NetRelevant_RedirectProjectilesSimProxies(const TArray<FAMP_ProjectileRedirect>& Redirects);
 
 	// Runs on client
 	virtual void RedirectProjectileSimProxy(const FAMP_ProjectileRedirect& Redirect);
@@ -120,7 +123,7 @@ protected:
 	// none is queued with that id
 	UAMP_ProjectileMovementComponent* FireQueuedProjectile(const FGuid& ProjectileID);
 
-	// Process the server spawned and destroyed projectiles buffers
+	// Server: send the tick's buffered messages, one call per kind, in order: spawns, redirects, ends
 	virtual void ProcessServerProjectilesBuffers(float DeltaTime);
 
 	virtual void SetProjectileDataDefaults(FAMP_ProjectileData& ProjectileData);
@@ -165,6 +168,14 @@ private:
 	// Buffer of projectiles that were spawned on server and need to be spawned on clients
 	UPROPERTY()
 	TArray<FAMP_ProjectileData> ServerProjectilesBuffer;
+
+	// Server: this tick's redirects, sent after its spawns
+	UPROPERTY()
+	TArray<FAMP_ProjectileRedirect> ServerRedirectBuffer;
+
+	// Server: this tick's ends, sent last (a projectile spawned and ended within one tick arrives spawn first)
+	UPROPERTY()
+	TArray<FAMP_ProjectileEnd> ServerEndBuffer;
 	
 	UPROPERTY()
 	TMap<UClass*, FAMP_ProjectilePool> ProjectilePool;

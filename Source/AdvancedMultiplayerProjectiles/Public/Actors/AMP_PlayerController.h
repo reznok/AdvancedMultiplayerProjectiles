@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
+#include "Utility/FAMP_ProjectileEvents.h"
 #include "AMP_PlayerController.generated.h"
 
 class UNetworkTimeSyncComponent;
@@ -31,9 +32,13 @@ public:
 	UFUNCTION(Client, UnReliable)
 	virtual void ClientRPC_SpawnProjectilesSimProxies(const TArray<FAMP_ProjectileData>& ProjectileData);
 
-	// Tell sim proxies to destroy a spawned projectile
+	// Tell this client a projectile ended
 	UFUNCTION(Client, UnReliable)
-	virtual void ClientRPC_DestroyProjectileSimProxy(const FGuid ProjectileID);
+	virtual void ClientRPC_EndProjectileSimProxy(const FAMP_ProjectileEnd& End);
+
+	// Tell this client a projectile was redirected
+	UFUNCTION(Client, UnReliable)
+	virtual void ClientRPC_RedirectProjectileSimProxy(const FAMP_ProjectileRedirect& Redirect);
 
 	UFUNCTION(BlueprintCallable)
 	virtual UAMP_ProjectileMovementComponent* SpawnClientPredictedProjectile(FAMP_ProjectileData ProjectileData);

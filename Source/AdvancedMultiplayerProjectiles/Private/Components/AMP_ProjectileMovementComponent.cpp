@@ -8,6 +8,7 @@
 #include "Engine/World.h"
 #include "GameFramework/PlayerState.h"
 #include "Kismet/GameplayStatics.h"
+#include "NetworkTimeSubsystem.h"
 #include "WorldCollision.h"
 
 
@@ -17,15 +18,21 @@ UAMP_ProjectileMovementComponent::UAMP_ProjectileMovementComponent()
 	// Set this component to be initialized when the game starts, and to be ticked every frame.  You can turn these features
 	// off to improve performance if you don't need them.
 	PrimaryComponentTick.bCanEverTick = true;
+	AdaptivePredictionObjectTypes.Add(UEngineTypes::ConvertToObjectType(ECC_Pawn));
 
 	// ...
 }
 
 void UAMP_ProjectileMovementComponent::DestroyProjectile()
 {
+	if (EndLocation.IsZero() && GetOwner())
+	{
+		EndLocation = GetOwner()->GetActorLocation();
+	}
 	if (ProjectileManager)
 	{
-		ProjectileManager->DestroyProjectile(this);
+		// Already ended (and possibly pooled): no second OnProjectileDestroyed
+		if (!ProjectileManager->DestroyProjectile(this)) return;
 	}
 	else
 	{
@@ -33,6 +40,51 @@ void UAMP_ProjectileMovementComponent::DestroyProjectile()
 	}
 
 	OnProjectileDestroyed.Broadcast();
+}
+
+void UAMP_ProjectileMovementComponent::EndProjectileAt(const FVector& Location, const uint8 InEndCode)
+{
+	EndCode = InEndCode;
+	EndLocation = Location;
+	DestroyProjectile();
+}
+
+void UAMP_ProjectileMovementComponent::ApplyEnd(const FAMP_ProjectileEnd& End)
+{
+	if (GetOwner())
+	{
+		GetOwner()->SetActorLocation(End.Location);
+	}
+	EndProjectileAt(End.Location, End.EndCode);
+}
+
+void UAMP_ProjectileMovementComponent::SetFlightVelocity(const FVector& NewVelocity)
+{
+	Velocity = NewVelocity;
+	UpdateComponentVelocity();
+	if (!NewVelocity.IsNearlyZero() && GetOwner())
+	{
+		GetOwner()->SetActorRotation(NewVelocity.Rotation());
+	}
+}
+
+void UAMP_ProjectileMovementComponent::ApplyRedirect(const FAMP_ProjectileRedirect& Redirect)
+{
+	if (GetOwner())
+	{
+		GetOwner()->SetActorLocation(Redirect.Location);
+	}
+	SetFlightVelocity(Redirect.Velocity);
+
+	// Catch up from the server's moment of the change to now, with the same clamp as a spawn
+	const UNetworkTimeSubsystem* TimeSubsystem = ProjectileManager ? ProjectileManager->GetNetworkTimeSubsystem().Get() : nullptr;
+	const float Now = TimeSubsystem ? TimeSubsystem->GetServerWorldTime() : Redirect.ServerTime;
+	InterpolationTimeRemaining = FMath::Clamp(Now - Redirect.ServerTime, 0.f, MaxPredictionPing / 2 / 1000);
+
+	// The new path may threaten the local player (or stop threatening it): ask again
+	bFoundAdaptivePredictionHit = false;
+	AdaptivePredictionCheckTimer = 0.f;
+	OnProjectileRedirected.Broadcast();
 }
 
 // Called when the game starts
@@ -66,7 +118,10 @@ void UAMP_ProjectileMovementComponent::SetProjectileData(const FAMP_ProjectileDa
 	
 	InterpolationTimeRemaining = 0.0f;
 	ForwardInterpolationTime = 0.0f;
-	
+	EndCode = AMP_EndCode::Destroyed;
+	EndLocation = FVector::ZeroVector;
+	AdaptivePredictionCheckTimer = 0.f;
+
 	InitializeProjectile();
 }
 
@@ -189,7 +244,7 @@ void UAMP_ProjectileMovementComponent::InitializeProjectile()
 
 bool UAMP_ProjectileMovementComponent::ShouldApplyAdaptivePrediction()
 {
-	return false;
+	return IsLocalPlayerInProjectilePath(false);
 }
 
 float UAMP_ProjectileMovementComponent::HandleInterpolation(float DeltaTime)
@@ -276,10 +331,11 @@ bool UAMP_ProjectileMovementComponent::IsLocalPlayerInProjectilePath(bool DrawDe
 	PathParams.StartLocation = GetOwner()->GetActorLocation();
 	PathParams.LaunchVelocity = Velocity;
 	PathParams.bTraceWithCollision = true;
-	PathParams.ProjectileRadius = 100.f;
-	PathParams.MaxSimTime = 1.0f;
-	PathParams.bTraceWithChannel = true;
-	PathParams.TraceChannel = ECC_GameTraceChannel1;
+	PathParams.ProjectileRadius = AdaptivePredictionRadius;
+	PathParams.MaxSimTime = AdaptivePredictionHorizon;
+	// Object queries report any object of these types, so query-only (overlap) pawns are found too
+	PathParams.bTraceWithChannel = false;
+	PathParams.ObjectTypes = AdaptivePredictionObjectTypes;
 	if (DrawDebug)
 	{
 		PathParams.DrawDebugType = EDrawDebugTrace::ForDuration;
@@ -327,12 +383,20 @@ void UAMP_ProjectileMovementComponent::TickComponent(float DeltaTime, ELevelTick
 		}
 	}
 
-	if (GetNetMode() == NM_Client && bUseAdaptivePrediction && !bFoundAdaptivePredictionHit && IsLocalPlayerInProjectilePath(false))
+	if (GetNetMode() == NM_Client && bUseAdaptivePrediction && !bFoundAdaptivePredictionHit && !ProjectileData.bIsLocallyFired)
 	{
-		bForwardInterpolationStarted = true;
-		bFoundAdaptivePredictionHit = true;
-		InterpolationTimeRemaining += ForwardInterpolationTime;
-		UE_LOG(LogAMP, Verbose, TEXT("UAMP_ProjectileMovementComponent::TickComponent: Adaptive Prediction Hit"));
+		AdaptivePredictionCheckTimer -= DeltaTime;
+		if (AdaptivePredictionCheckTimer <= 0.f)
+		{
+			AdaptivePredictionCheckTimer = AdaptivePredictionCheckInterval;
+			if (ShouldApplyAdaptivePrediction())
+			{
+				bForwardInterpolationStarted = true;
+				bFoundAdaptivePredictionHit = true;
+				InterpolationTimeRemaining += ForwardInterpolationTime;
+				UE_LOG(LogAMP, Verbose, TEXT("UAMP_ProjectileMovementComponent::TickComponent: Adaptive Prediction Hit"));
+			}
+		}
 	}
 
 	const FVector PreMoveLocation = GetOwner() ? GetOwner()->GetActorLocation() : FVector::ZeroVector;
@@ -351,7 +415,7 @@ void UAMP_ProjectileMovementComponent::TickComponent(float DeltaTime, ELevelTick
 	// ...
 }
 
-void UAMP_ProjectileMovementComponent::DetectAndReportHits(const FVector& StartLocation, const FVector& EndLocation)
+void UAMP_ProjectileMovementComponent::DetectAndReportHits(const FVector& SegmentStart, const FVector& SegmentEnd)
 {
 	if (!OnProjectileHit.IsBound()) return;
 
@@ -370,13 +434,13 @@ void UAMP_ProjectileMovementComponent::DetectAndReportHits(const FVector& StartL
 
 	// SweepMulti needs a non-degenerate segment; nudge the end if the projectile
 	// did not move this tick so a resting overlap is still caught.
-	const FVector SweepEnd = (EndLocation - StartLocation).IsNearlyZero()
-		                         ? EndLocation + FVector(0.f, 0.f, KINDA_SMALL_NUMBER)
-		                         : EndLocation;
+	const FVector SweepEnd = (SegmentEnd - SegmentStart).IsNearlyZero()
+		                         ? SegmentEnd + FVector(0.f, 0.f, KINDA_SMALL_NUMBER)
+		                         : SegmentEnd;
 
 	TArray<FHitResult> Hits;
 	const bool bAnyHit = World->SweepMultiByObjectType(
-		Hits, StartLocation, SweepEnd, FQuat::Identity, ObjectParams,
+		Hits, SegmentStart, SweepEnd, FQuat::Identity, ObjectParams,
 		FCollisionShape::MakeSphere(FMath::Max(HitDetectionRadius, 1.f)), Params);
 
 	if (!bAnyHit) return;

@@ -8,7 +8,9 @@
 
 AAMP_AMPManager* UAMP_BlueprintFunctionLibrary::GetAMPManager(UObject* WorldContextObject)
 {
-	for (TActorIterator<AAMP_AMPManager> ActorItr(WorldContextObject->GetWorld()); ActorItr; ++ActorItr)
+	// One manager per world: the first one found (an if, not a one-iteration loop: clang -Wunreachable-code-loop-increment)
+	TActorIterator<AAMP_AMPManager> ActorItr(WorldContextObject->GetWorld());
+	if (ActorItr)
 	{
 		return *ActorItr;
 	}

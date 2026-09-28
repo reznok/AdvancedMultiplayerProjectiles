@@ -6,6 +6,7 @@
 #include "NetworkTimeSubsystem.h"
 #include "GameFramework/Actor.h"
 #include "Utility/FAMP_ProjectileData.h"
+#include "Utility/FAMP_ProjectileEvents.h"
 #include "Actors/AMP_PlayerController.h"
 #include "Utility/EAMP_LagCompensationMethod.h"
 #include "Utility/FAMP_ProjectilePool.h"
@@ -65,18 +66,39 @@ public:
 	// Runs on client
 	virtual void SpawnProjectilesSimProxies(const TArray<FAMP_ProjectileData>& ProjectileData);
 
-	// Tell sim proxies to destroy a spawned projectile
-	UFUNCTION(NetMulticast, UnReliable)
-	virtual void MultiCast_DestroyProjectileSimProxy(const FGuid ProjectileID);
+	// Spawn the firing client's own copies of client-predicted shots, locally only (no server RPC). For games whose
+	// server spawns its own authoritative copy (give both the same PredictionKey). Client only; returns the spawned copies.
+	virtual TArray<UAMP_ProjectileMovementComponent*> SpawnLocalPredictedProjectiles(TArray<FAMP_ProjectileData>& ProjectilesData);
 
-	// Runs on server, finds all PlayerControllers near destroyed projectiles and tells them to destroy the projectiles
-	virtual void NetRelevant_DestroyProjectileSimProxy(const FGuid ProjectileID);
+	// Tell sim proxies (and the firing client's predicted copy) a projectile ended
+	UFUNCTION(NetMulticast, UnReliable)
+	virtual void MultiCast_EndProjectileSimProxy(const FAMP_ProjectileEnd& End);
+
+	// Runs on server, finds all PlayerControllers near the ended projectile and tells them
+	virtual void NetRelevant_EndProjectileSimProxy(const FAMP_ProjectileEnd& End);
 
 	// Runs on client
-	virtual void DestroyProjectileSimProxy(const FGuid ProjectileID);
+	virtual void EndProjectileSimProxy(const FAMP_ProjectileEnd& End);
 
-	// Server entry point for destroying projectiles
-	void DestroyProjectile(UAMP_ProjectileMovementComponent* DestroyedProjectile);
+	// Entry point for destroying projectiles (server: also notifies clients). False when it was already destroyed.
+	bool DestroyProjectile(UAMP_ProjectileMovementComponent* DestroyedProjectile);
+
+	// Server: give a projectile a new velocity and tell every client copy
+	virtual void RedirectProjectile(UAMP_ProjectileMovementComponent* Projectile, const FVector& NewVelocity);
+
+	UFUNCTION(NetMulticast, UnReliable)
+	virtual void MultiCast_RedirectProjectileSimProxy(const FAMP_ProjectileRedirect& Redirect);
+
+	virtual void NetRelevant_RedirectProjectileSimProxy(const FAMP_ProjectileRedirect& Redirect);
+
+	// Runs on client
+	virtual void RedirectProjectileSimProxy(const FAMP_ProjectileRedirect& Redirect);
+
+	// A live projectile by server id, else (client) by prediction key; null when neither is live here
+	UAMP_ProjectileMovementComponent* FindProjectile(const FGuid& ProjectileID, int64 PredictionKey) const;
+
+	// The local player's controller (listen server or client), resolved on first use
+	APlayerController* GetLocalPlayerController();
 
 	TObjectPtr<UNetworkTimeSubsystem> GetNetworkTimeSubsystem() const { return NetworkTimeSubsystem; }
 	
@@ -131,6 +153,10 @@ public:
 private:
 	UPROPERTY()
 	TMap<FGuid, TObjectPtr<UAMP_ProjectileMovementComponent>> SpawnedProjectiles;
+
+	// Client: the firing client's predicted copies by prediction key, until they end
+	UPROPERTY()
+	TMap<int64, TObjectPtr<UAMP_ProjectileMovementComponent>> PredictedProjectiles;
 
 	// Buffer of projectiles that were spawned on server and need to be spawned on clients
 	UPROPERTY()

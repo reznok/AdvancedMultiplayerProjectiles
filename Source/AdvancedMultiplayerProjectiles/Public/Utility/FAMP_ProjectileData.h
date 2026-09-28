@@ -101,6 +101,13 @@ struct ADVANCEDMULTIPLAYERPROJECTILES_API FAMP_ProjectileData
 	// Not replicated
 	bool bIsLocallyFired{false};
 
+	// Optional caller key shared by the two copies of one client-predicted shot: the firing client's local copy
+	// (AAMP_AMPManager::SpawnLocalPredictedProjectiles) and the server's authoritative copy. The server's end and
+	// redirect messages carry it, so the firing client's copy ends and turns with the server's. 0 = none. Must be unique
+	// per shot across all players.
+	UPROPERTY()
+	int64 PredictionKey{0};
+
 	inline bool operator==(const FAMP_ProjectileData& Other) const
 	{
 		return ProjectileID == Other.ProjectileID;

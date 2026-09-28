@@ -47,7 +47,12 @@ TArray<UAMP_ProjectileMovementComponent*> AAMP_PlayerController::SpawnClientPred
 		
 		Data.ClientProjectileSpawnTime = ProjectileManager->GetNetworkTimeSubsystem()->GetServerWorldTime();
 		Data.bIsLocallyFired = true;
-		
+		// Distinct local ids (the server assigns its own)
+		if (!HasAuthority())
+		{
+			Data.ProjectileID = FGuid::NewGuid();
+		}
+
 	}
 	
 	// Spawn Locally
@@ -76,11 +81,19 @@ bool AAMP_PlayerController::ServerRPC_SpawnClientPredictedProjectiles_Validate(c
 	return true;
 }
 
-void AAMP_PlayerController::ClientRPC_DestroyProjectileSimProxy_Implementation(const FGuid ProjectileID)
+void AAMP_PlayerController::ClientRPC_EndProjectileSimProxy_Implementation(const FAMP_ProjectileEnd& End)
 {
 	if (ProjectileManager)
 	{
-		ProjectileManager->DestroyProjectileSimProxy(ProjectileID);
+		ProjectileManager->EndProjectileSimProxy(End);
+	}
+}
+
+void AAMP_PlayerController::ClientRPC_RedirectProjectileSimProxy_Implementation(const FAMP_ProjectileRedirect& Redirect)
+{
+	if (ProjectileManager)
+	{
+		ProjectileManager->RedirectProjectileSimProxy(Redirect);
 	}
 }
 

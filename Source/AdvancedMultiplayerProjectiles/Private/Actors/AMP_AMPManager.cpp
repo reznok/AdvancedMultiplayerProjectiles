@@ -45,11 +45,9 @@ void AAMP_AMPManager::BeginPlay()
 		AllocateStartingPools();
 	}
 
-	// Only Listen Servers and Clients need to know about the local player controller
-	if (GetNetMode() >= NM_ListenServer)
-	{
-		LocalPlayerController = UGameplayStatics::GetPlayerController(GetWorld(), 0);
-	}
+	// Only Listen Servers and Clients need to know about the local player controller (resolved again on use: a client's
+	// controller can arrive after the manager begins play)
+	GetLocalPlayerController();
 
 	NetworkTimeSubsystem = UNetworkTimeSubsystem::Get(this);
 }
@@ -144,21 +142,49 @@ void AAMP_AMPManager::SpawnProjectilesSimProxies(const TArray<FAMP_ProjectileDat
 	}
 }
 
-void AAMP_AMPManager::MultiCast_DestroyProjectileSimProxy_Implementation(const FGuid ProjectileID)
+TArray<UAMP_ProjectileMovementComponent*> AAMP_AMPManager::SpawnLocalPredictedProjectiles(TArray<FAMP_ProjectileData>& ProjectilesData)
 {
-	// Server and AuthProxy has already spawned it by this point
-	if (GetLocalRole() == ROLE_Authority) return;
-
-	DestroyProjectileSimProxy(ProjectileID);
+	TArray<UAMP_ProjectileMovementComponent*> Spawned;
+	if (GetLocalRole() == ROLE_Authority)
+	{
+		UE_LOG(LogAMP, Warning, TEXT("AAMP_AMPManager::SpawnLocalPredictedProjectiles: client only (the server spawns its own copy)"));
+		return Spawned;
+	}
+	const float Now = NetworkTimeSubsystem ? NetworkTimeSubsystem->GetServerWorldTime() : 0.f;
+	for (FAMP_ProjectileData& Data : ProjectilesData)
+	{
+		Data.IsClientPredicted = true;
+		Data.bIsServerSpawned = false;
+		Data.bIsLocallyFired = true;
+		Data.ClientProjectileSpawnTime = Now;
+		// Local id: never matches a server id, and keeps every local copy distinct in SpawnedProjectiles
+		Data.ProjectileID = FGuid::NewGuid();
+		if (UAMP_ProjectileMovementComponent* ProjectileCmp = FireProjectile(Data))
+		{
+			if (Data.PredictionKey != 0)
+			{
+				PredictedProjectiles.Add(Data.PredictionKey, ProjectileCmp);
+			}
+			Spawned.Add(ProjectileCmp);
+		}
+	}
+	return Spawned;
 }
 
-void AAMP_AMPManager::NetRelevant_DestroyProjectileSimProxy(const FGuid ProjectileID)
+void AAMP_AMPManager::MultiCast_EndProjectileSimProxy_Implementation(const FAMP_ProjectileEnd& End)
+{
+	// The server already ended it
+	if (GetLocalRole() == ROLE_Authority) return;
+
+	EndProjectileSimProxy(End);
+}
+
+void AAMP_AMPManager::NetRelevant_EndProjectileSimProxy(const FAMP_ProjectileEnd& End)
 {
 	if (GetLocalRole() != ROLE_Authority) return;
 
-	// Mirror of NetRelevant_SpawnProjectilesSimProxies: per-client culled delivery
-	// for AAMP_PlayerController, with a class-agnostic NetMulticast fallback when
-	// the project uses a different controller base.
+	// Mirror of NetRelevant_SpawnProjectilesSimProxies: per-client culled delivery for AAMP_PlayerController, with a
+	// class-agnostic NetMulticast fallback when the project uses a different controller base
 	int32 NumAMPControllers = 0;
 	for (TActorIterator<APlayerController> ActorItr(GetWorld()); ActorItr; ++ActorItr)
 	{
@@ -166,29 +192,113 @@ void AAMP_AMPManager::NetRelevant_DestroyProjectileSimProxy(const FGuid Projecti
 		if (!PlayerController) continue;
 		++NumAMPControllers;
 
-		TObjectPtr<UAMP_ProjectileMovementComponent> ProjectileComponent = SpawnedProjectiles.FindRef(ProjectileID);
-		if (ProjectileComponent && IsPlayerControllerRelevantForProjectile(PlayerController, ProjectileComponent->GetOwner()->GetActorLocation()))
+		if (IsPlayerControllerRelevantForProjectile(PlayerController, End.Location))
 		{
-			PlayerController->ClientRPC_DestroyProjectileSimProxy(ProjectileID);
+			PlayerController->ClientRPC_EndProjectileSimProxy(End);
 		}
 	}
 
 	if (NumAMPControllers == 0)
 	{
-		MultiCast_DestroyProjectileSimProxy(ProjectileID);
+		MultiCast_EndProjectileSimProxy(End);
 	}
 }
 
-void AAMP_AMPManager::DestroyProjectileSimProxy(const FGuid ProjectileID)
+void AAMP_AMPManager::EndProjectileSimProxy(const FAMP_ProjectileEnd& End)
 {
-	// Projectile is already destroyed on the server
+	// Projectile is already ended on the server
 	if (GetLocalRole() == ROLE_Authority) return;
-	
-	TObjectPtr<UAMP_ProjectileMovementComponent> ProjectileComponent = SpawnedProjectiles.FindRef(ProjectileID);
-	if (ProjectileComponent)
+
+	if (UAMP_ProjectileMovementComponent* ProjectileComponent = FindProjectile(End.ProjectileID, End.PredictionKey))
 	{
-		ProjectileComponent->DestroyProjectile();
-		RemoveProjectile(ProjectileID);
+		ProjectileComponent->ApplyEnd(End);
+	}
+}
+
+UAMP_ProjectileMovementComponent* AAMP_AMPManager::FindProjectile(const FGuid& ProjectileID, const int64 PredictionKey) const
+{
+	if (const TObjectPtr<UAMP_ProjectileMovementComponent>* ById = SpawnedProjectiles.Find(ProjectileID))
+	{
+		return *ById;
+	}
+	if (PredictionKey != 0)
+	{
+		if (const TObjectPtr<UAMP_ProjectileMovementComponent>* ByKey = PredictedProjectiles.Find(PredictionKey))
+		{
+			return *ByKey;
+		}
+	}
+	return nullptr;
+}
+
+APlayerController* AAMP_AMPManager::GetLocalPlayerController()
+{
+	if (!LocalPlayerController && (GetNetMode() == NM_Client || GetNetMode() == NM_ListenServer))
+	{
+		LocalPlayerController = UGameplayStatics::GetPlayerController(GetWorld(), 0);
+	}
+	return LocalPlayerController;
+}
+
+void AAMP_AMPManager::RedirectProjectile(UAMP_ProjectileMovementComponent* Projectile, const FVector& NewVelocity)
+{
+	if (!Projectile || GetLocalRole() != ROLE_Authority) return;
+
+	Projectile->SetFlightVelocity(NewVelocity);
+
+	FAMP_ProjectileRedirect Redirect;
+	Redirect.ProjectileID = Projectile->GetProjectileID();
+	Redirect.PredictionKey = Projectile->GetPredictionKey();
+	Redirect.Location = Projectile->GetOwner()->GetActorLocation();
+	Redirect.Velocity = NewVelocity;
+	Redirect.ServerTime = NetworkTimeSubsystem ? NetworkTimeSubsystem->GetServerWorldTime() : 0.f;
+	if (bUseAMP_NetRelevancy)
+	{
+		NetRelevant_RedirectProjectileSimProxy(Redirect);
+	}
+	else
+	{
+		MultiCast_RedirectProjectileSimProxy(Redirect);
+	}
+}
+
+void AAMP_AMPManager::MultiCast_RedirectProjectileSimProxy_Implementation(const FAMP_ProjectileRedirect& Redirect)
+{
+	if (GetLocalRole() == ROLE_Authority) return;
+
+	RedirectProjectileSimProxy(Redirect);
+}
+
+void AAMP_AMPManager::NetRelevant_RedirectProjectileSimProxy(const FAMP_ProjectileRedirect& Redirect)
+{
+	if (GetLocalRole() != ROLE_Authority) return;
+
+	int32 NumAMPControllers = 0;
+	for (TActorIterator<APlayerController> ActorItr(GetWorld()); ActorItr; ++ActorItr)
+	{
+		AAMP_PlayerController* PlayerController = Cast<AAMP_PlayerController>(*ActorItr);
+		if (!PlayerController) continue;
+		++NumAMPControllers;
+
+		if (IsPlayerControllerRelevantForProjectile(PlayerController, Redirect.Location))
+		{
+			PlayerController->ClientRPC_RedirectProjectileSimProxy(Redirect);
+		}
+	}
+
+	if (NumAMPControllers == 0)
+	{
+		MultiCast_RedirectProjectileSimProxy(Redirect);
+	}
+}
+
+void AAMP_AMPManager::RedirectProjectileSimProxy(const FAMP_ProjectileRedirect& Redirect)
+{
+	if (GetLocalRole() == ROLE_Authority) return;
+
+	if (UAMP_ProjectileMovementComponent* ProjectileComponent = FindProjectile(Redirect.ProjectileID, Redirect.PredictionKey))
+	{
+		ProjectileComponent->ApplyRedirect(Redirect);
 	}
 }
 
@@ -295,10 +405,11 @@ TObjectPtr<UAMP_ProjectileMovementComponent> AAMP_AMPManager::FireProjectile(FAM
 	}
 
 	// If the projectile is client predicted and the owner is the local player, and we're not showing server projectiles, don't spawn the projectile
+	APlayerController* LocalPC = GetLocalPlayerController();
 	if (ProjectileData.IsClientPredicted &&
 		ProjectileData.bIsServerSpawned &&
 		!bShowServerProjectile &&
-		(LocalPlayerController && (ProjectileData.Owner == LocalPlayerController || ProjectileData.Owner == LocalPlayerController->GetPawn())))
+		(LocalPC && (ProjectileData.Owner == LocalPC || ProjectileData.Owner == LocalPC->GetPawn())))
 	{
 		// UE_LOG(LogTemp, Warning, TEXT("UPP_PredProjectileFiringComponent::FireProjectile: Not spawning client predicted projectile for local player"));
 		return nullptr;
@@ -339,16 +450,32 @@ TObjectPtr<UAMP_ProjectileMovementComponent> AAMP_AMPManager::FireProjectile(FAM
 	}return nullptr;
 }
 
-void AAMP_AMPManager::DestroyProjectile(UAMP_ProjectileMovementComponent* DestroyedProjectile)
+bool AAMP_AMPManager::DestroyProjectile(UAMP_ProjectileMovementComponent* DestroyedProjectile)
 {
-	if (!DestroyedProjectile) return;
+	if (!DestroyedProjectile) return false;
 
-	// Check if the projectile is in the spawned projectiles list (aka hasn't been destroyed yet)
-	if (!SpawnedProjectiles.Contains(DestroyedProjectile->GetProjectileID())) return;
+	// Not in the list: already destroyed (e.g. a client copy that ended locally before the server's message arrived)
+	const FGuid ProjectileID = DestroyedProjectile->GetProjectileID();
+	if (!SpawnedProjectiles.Contains(ProjectileID)) return false;
+
+	// Read everything before pooling resets the component
+	FAMP_ProjectileEnd End;
+	End.ProjectileID = ProjectileID;
+	End.PredictionKey = DestroyedProjectile->GetPredictionKey();
+	End.Location = DestroyedProjectile->GetEndLocation();
+	End.EndCode = DestroyedProjectile->GetEndCode();
+	const bool bNotifyClients = HasAuthority() && DestroyedProjectile->NotifyClientsOnDestroy();
+
+	// Every machine forgets the id, so a late message for it can never reach this pooled actor's next flight
+	SpawnedProjectiles.Remove(ProjectileID);
+	if (End.PredictionKey != 0 && !HasAuthority())
+	{
+		PredictedProjectiles.Remove(End.PredictionKey);
+	}
 
 	// Move projectile to pool or destroy
 	if (bUseProjectilePool)
-	{;
+	{
 		ReturnProjectileToPool(DestroyedProjectile->GetOwner());
 	}
 	else
@@ -356,19 +483,18 @@ void AAMP_AMPManager::DestroyProjectile(UAMP_ProjectileMovementComponent* Destro
 		DestroyedProjectile->GetOwner()->Destroy();
 	}
 
-	// Notify clients to destroy the projectile
-	if (HasAuthority() && DestroyedProjectile->NotifyClientsOnDestroy())
+	if (bNotifyClients)
 	{
 		if (bUseAMP_NetRelevancy)
 		{
-			NetRelevant_DestroyProjectileSimProxy(DestroyedProjectile->GetProjectileID());
+			NetRelevant_EndProjectileSimProxy(End);
 		}
 		else
 		{
-			MultiCast_DestroyProjectileSimProxy(DestroyedProjectile->GetProjectileID());
+			MultiCast_EndProjectileSimProxy(End);
 		}
-		SpawnedProjectiles.Remove(DestroyedProjectile->GetProjectileID());
 	}
+	return true;
 }
 
 

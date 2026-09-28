@@ -4,6 +4,8 @@
 
 #include "CoreMinimal.h"
 #include "Utility/FAMP_ProjectileData.h"
+#include "Engine/EngineTypes.h"
+#include "Utility/FAMP_ProjectileEvents.h"
 #include "Components/ActorComponent.h"
 #include "GameFramework/ProjectileMovementComponent.h"
 #include "AMP_ProjectileMovementComponent.generated.h"
@@ -15,6 +17,7 @@ struct FAMP_ProjectileData;
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnProjectileHit, AActor*, HitActor, FVector, HitLocation);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnProjectileDestroyed);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnProjectileInitialized);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnProjectileRedirected);
 
 UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
 class ADVANCEDMULTIPLAYERPROJECTILES_API UAMP_ProjectileMovementComponent : public UProjectileMovementComponent
@@ -36,6 +39,36 @@ public:
 
 	UFUNCTION()
 	bool NotifyClientsOnDestroy() const { return bServerNotifiesClientsOnDestroy; }
+
+	// The key shared with the other copy of a client-predicted shot (0 = none)
+	int64 GetPredictionKey() const { return ProjectileData.PredictionKey; }
+
+	// This machine fired it (the firing client's predicted copy, or a listen server's own shot)
+	bool IsLocallyFired() const { return ProjectileData.bIsLocallyFired; }
+
+	// Why the current (or last) flight ended; valid inside OnProjectileDestroyed
+	uint8 GetEndCode() const { return EndCode; }
+
+	// Where the current (or last) flight ended; valid inside OnProjectileDestroyed
+	FVector GetEndLocation() const { return EndLocation; }
+
+	// Server: end this flight at Location with a game-defined code (sent to every client copy)
+	UFUNCTION(BlueprintCallable)
+	void EndProjectileAt(const FVector& Location, uint8 InEndCode);
+
+	// Client: the server ended this flight (snaps to the server's end location, then destroys)
+	virtual void ApplyEnd(const FAMP_ProjectileEnd& End);
+
+	// Client: the server redirected this flight (re-places it and catches up from the server's time)
+	virtual void ApplyRedirect(const FAMP_ProjectileRedirect& Redirect);
+
+	// Sets the flight velocity and faces it
+	void SetFlightVelocity(const FVector& NewVelocity);
+
+	AAMP_AMPManager* GetProjectileManager() const { return ProjectileManager; }
+
+	UPROPERTY(BlueprintAssignable)
+	FOnProjectileRedirected OnProjectileRedirected;
 
 	UFUNCTION(BlueprintCallable)
 	void DestroyProjectile();
@@ -72,9 +105,32 @@ protected:
 	bool bFoundAdaptivePredictionHit{false};
 	bool bIsCheckingAdaptivePrediction{false};
 
-	// Intentionally left blank overridable function for custom adaptive prediction detections
+	// Client: whether this (remote) projectile threatens the local player, so it is shown ahead by the local one-way delay.
+	// Asked every AdaptivePredictionCheckInterval until it answers true once (again after a redirect). Default: a path
+	// trace for the local pawn (IsLocalPlayerInProjectilePath); override with the game's own threat test.
 	UFUNCTION(BlueprintCallable)
 	virtual bool ShouldApplyAdaptivePrediction();
+
+	// Default adaptive test: object types the path trace looks for (the local pawn must be one of them)
+	UPROPERTY(EditAnywhere)
+	TArray<TEnumAsByte<EObjectTypeQuery>> AdaptivePredictionObjectTypes;
+
+	// Default adaptive test: radius (uu) of the swept path
+	UPROPERTY(EditAnywhere)
+	float AdaptivePredictionRadius{100.f};
+
+	// Default adaptive test: seconds of flight traced ahead
+	UPROPERTY(EditAnywhere)
+	float AdaptivePredictionHorizon{1.f};
+
+	// Seconds between adaptive tests (0 = every tick)
+	UPROPERTY(EditAnywhere)
+	float AdaptivePredictionCheckInterval{0.f};
+
+	float AdaptivePredictionCheckTimer{0.f};
+
+	uint8 EndCode{AMP_EndCode::Destroyed};
+	FVector EndLocation{FVector::ZeroVector};
 
 	// How far behind the sim proxy is in time
 	float HalfRTT{0.f};
@@ -146,7 +202,7 @@ protected:
 	// gameplay from this on authority only — the projectile owns no gameplay
 	// state. Runs only when OnProjectileHit is bound, so unbound projectiles
 	// pay nothing and existing behaviour is unchanged.
-	virtual void DetectAndReportHits(const FVector& StartLocation, const FVector& EndLocation);
+	virtual void DetectAndReportHits(const FVector& SegmentStart, const FVector& SegmentEnd);
 
 	// Radius (uu) of the server-side hit-detection sweep. Clamped to >= 1.
 	UPROPERTY(EditAnywhere)

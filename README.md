@@ -36,3 +36,21 @@ Bind `UAMP_ProjectileMovementComponent::OnProjectileHit`. On the authority, each
 ## Simulated proxies
 
 Server-spawned projectiles are shown on clients through the manager (replicated, always relevant). With `bUseAMP_NetRelevancy`, each `AAMP_PlayerController` within `AMP_NetRelevancyRange` gets a per-client RPC. If the game has **no** `AAMP_PlayerController`s (for example, its controllers derive from another base such as GMC's), spawns and destroys fall back to the manager's NetMulticast without distance culling, so every client still sees the projectiles. Mixing AMP and non-AMP controllers in one game is not supported by the fallback.
+
+## Client-predicted shots fired from game code
+
+When the game's own predicted logic runs on the firing client and on the server (for example a GMAS or GMC ability), let each side spawn its own copy and link them with a key:
+1. **Firing client**, on the live (non-replayed) run: `Manager->SpawnLocalPredictedProjectiles(Data)` with `Data.PredictionKey` set. No RPC is sent.
+2. **Server**, running the same logic: `Manager->SpawnProjectile(Data)` with the same `PredictionKey`, `IsClientPredicted = true`, `ClientProjectileSpawnTime` = the client's fire time in NetworkTimeSync server time, and `InterpolationType = Snap`, so the authoritative copy is fast-forwarded to the client's timeline (clamped by `MaxPredictionPing`). The firing client never shows the server copy.
+3. **Other clients** get the server copy through the normal sim-proxy path and catch up.
+
+Keys must be unique per shot across all players.
+
+## End and redirect messages
+
+- End a flight on the server with `EndProjectileAt(Location, EndCode)` (or `DestroyProjectile()`, code 0). Every client copy, including the firing client's predicted copy (matched by `PredictionKey`), snaps to `Location` and ends; read `GetEndCode()`/`GetEndLocation()` in `OnProjectileDestroyed` to play the game's detonation cosmetics.
+- Change a flight on the server with `Manager->RedirectProjectile(Projectile, NewVelocity)`. Client copies are re-placed, catch up from the server's time and fire `OnProjectileRedirected`; adaptive prediction is asked again.
+
+## Adaptive forward prediction
+
+On clients, a remote projectile that threatens the local player is shown ahead by the local one-way delay (`ForwardPredictionScale`), so a dodge on screen matches the server. The component asks `ShouldApplyAdaptivePrediction()` every `AdaptivePredictionCheckInterval` until it answers true. The default answer is a path trace for the local pawn with `AdaptivePredictionObjectTypes` (Pawn by default), `AdaptivePredictionRadius` and `AdaptivePredictionHorizon`; override it with your game's threat test.

@@ -46,6 +46,8 @@ When the game's own predicted logic runs on the firing client and on the server 
 
 Keys must be unique per shot across all players.
 
+`Data.Payload` (int32, default 0) is a game-defined value carried with the spawn to every copy (the predicted copy, the server copy and every sim proxy), for example the id of the target a homing projectile steers toward; read it with `GetProjectileData().Payload`.
+
 ## End and redirect messages
 
 - End a flight on the server with `EndProjectileAt(Location, EndCode)` (or `DestroyProjectile()`, code 0). Every client copy, including the firing client's predicted copy (matched by `PredictionKey`), snaps to `Location` and ends; read `GetEndCode()`/`GetEndLocation()` in `OnProjectileDestroyed` to play the game's detonation cosmetics.

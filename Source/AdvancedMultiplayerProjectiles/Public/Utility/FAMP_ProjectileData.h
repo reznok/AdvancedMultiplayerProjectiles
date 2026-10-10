@@ -108,6 +108,10 @@ struct ADVANCEDMULTIPLAYERPROJECTILES_API FAMP_ProjectileData
 	UPROPERTY()
 	int64 PredictionKey{0};
 
+	// Game-defined value carried to every copy with the spawn (e.g. a target id)
+	UPROPERTY()
+	int32 Payload{0};
+
 	inline bool operator==(const FAMP_ProjectileData& Other) const
 	{
 		return ProjectileID == Other.ProjectileID;

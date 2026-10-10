@@ -643,7 +643,7 @@ void AAMP_AMPManager::AllocateStartingPools()
 	for (auto Pair : StartingPoolSizes)
 	{
 		ProjectilePool.Add(Pair.Key, FAMP_ProjectilePool(GetWorld(), Pair.Key, Pair.Value));
-		UE_LOG(LogAMP, Warning, TEXT("AAMP_AMPManager::AllocateStartingPools: Allocated %d %s"), Pair.Value, *Pair.Key->GetName());
+		UE_LOG(LogAMP, Log, TEXT("AAMP_AMPManager::AllocateStartingPools: Allocated %d %s"), Pair.Value, *Pair.Key->GetName());
 	}
 }
 
